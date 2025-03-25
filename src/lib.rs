@@ -596,6 +596,7 @@ impl SCPStateOpen {
     async fn start_tx(mut self, remote_path: &str) -> Result<SCPStateTxStart> {
         let command = format!("scp -t {}", remote_path);
         self.channel.exec(true, command).await?;
+        // TODO "cat > {}" is an alternative here if the target has no scp
 
         let data = wait_for_data(&mut self.channel).await?;
         if data[0] != 0 {
