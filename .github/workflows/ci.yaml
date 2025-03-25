@@ -23,6 +23,15 @@ jobs:
         with:
           toolchain: stable
 
+      # Set up cross-compilation to musl target
+      - name: Set up cross-compilation to musl
+        run: |
+          rustup target add x86_64-unknown-linux-musl
+          rustup target add i686-unknown-linux-musl
+          rustup target add aarch64-unknown-linux-musl
+          rustup target add arm-unknown-linux-musleabihf
+          export PATH="$HOME/.cargo/bin:$PATH"
+
       - name: Cache Cargo registry
         uses: actions/cache@v3
         with:
@@ -41,9 +50,22 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-target-
 
-      # Build the project
+      # Build the project for all musl targets
+      - name: Build project for musl-amd64
+        run: cargo build --release --target x86_64-unknown-linux-musl
+
+      - name: Build project for musl-i686
+        run: cargo build --release --target i686-unknown-linux-musl
+
+      - name: Build project for musl-aarch64
+        run: cargo build --release --target aarch64-unknown-linux-musl
+
+      - name: Build project for musl-arm
+        run: cargo build --release --target arm-unknown-linux-musleabihf
+
+      # Build the project for this machine
       - name: Build project
-        run: cargo build --release
+        run: cargo build
 
       # Run tests
       - name: Run tests
