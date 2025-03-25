@@ -1,0 +1,36 @@
+name: Rust CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Checkout the code
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # Set up Rust toolchain using actions-rust-lang/setup-rust-toolchain
+      - name: Set up Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      # Build the project
+      - name: Build project
+        run: cargo build --release
+
+      # Run tests
+      - name: Run tests
+        run: cargo test
+
+      # Optionally, check formatting using rustfmt
+      - name: Check formatting
+        run: cargo fmt -- --check
