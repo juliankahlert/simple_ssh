@@ -3,6 +3,11 @@ name = "simple_ssh"
 version = "0.1.0"
 edition = "2021"
 
+[profile.release]
+lto = true
+strip = true
+opt-level = "z"
+
 [dependencies]
 russh = "0.51.1"
 russh-keys = "0.49.2"
