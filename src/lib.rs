@@ -76,11 +76,7 @@ impl<'sb> Session {
     }
 
     pub async fn system(&mut self, command: &str) -> Result<u32> {
-        let sys_cmd = vec![
-            "sh".to_string(),
-            "-c".to_string(),
-            command.to_string(),
-        ];
+        let sys_cmd = vec!["sh".to_string(), "-c".to_string(), command.to_string()];
         self.inner.exec(Some(&sys_cmd), false, false).await
     }
 
@@ -678,6 +674,14 @@ impl SCPStateTxData {
 
     async fn eof(mut self) -> Result<SCPStateEOF> {
         self.writer.write_all(b"\0").await?;
+        self.writer.flush().await?;
+        let data = wait_for_data(&mut self.channel).await?;
+        if data[0] != 0 {
+            return Err(Error::msg(format!(
+                "SCP post-data confirmation failed: {:?}",
+                data
+            )));
+        }
         self.channel.eof().await?;
 
         Ok(SCPStateEOF {
@@ -709,7 +713,7 @@ async fn scp(
     // Get file size and name
     let metadata = file.metadata().await?;
     let file_size = metadata.len();
-    let file_name = std::path::Path::new(local_path)
+    let file_name = std::path::Path::new(remote_path)
         .file_name()
         .ok_or_else(|| anyhow::anyhow!("Invalid file name"))?
         .to_string_lossy();
