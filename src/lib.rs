@@ -68,11 +68,24 @@ impl<'sb> Session {
     }
 
     pub async fn run(&mut self) -> Result<u32> {
-        self.inner.system(None, true, true).await
+        self.inner.exec(None, true, true).await
     }
 
     pub async fn exec(&mut self, command: &Vec<String>) -> Result<u32> {
-        self.inner.system(Some(command), false, false).await
+        self.inner.exec(Some(command), false, false).await
+    }
+
+    pub async fn system(&mut self, command: &str) -> Result<u32> {
+        let sys_cmd = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            command.to_string(),
+        ];
+        self.inner.exec(Some(&sys_cmd), false, false).await
+    }
+
+    pub async fn cmd(&mut self, command: &str) -> Result<u32> {
+        self.inner.cmd(&command, false, false).await
     }
 
     pub async fn scp(&mut self, from: &str, to: &str) -> Result<()> {
@@ -284,18 +297,23 @@ impl SessionInner {
         return scp(sess, from, to).await;
     }
 
-    async fn system(&mut self, command: Option<&Vec<String>>, err: bool, out: bool) -> Result<u32> {
+    async fn exec(&mut self, command: Option<&Vec<String>>, err: bool, out: bool) -> Result<u32> {
         let cmd = if let Some(c) = command {
-            c.into_iter()
-                .map(|x| shell_escape::escape(x.into())) // arguments are escaped manually since the SSH protocol doesn't support quoting
-                .collect::<Vec<_>>()
-                .join(" ")
+            c.join(" ")
         } else {
             self.get_command()
         };
 
         if let Some(session) = self.get_session() {
             return system(session, &cmd, err, out).await;
+        }
+
+        Err(Error::msg("No open session"))
+    }
+
+    async fn cmd(&mut self, command: &str, err: bool, out: bool) -> Result<u32> {
+        if let Some(session) = self.get_session() {
+            return system(session, &command, err, out).await;
         }
 
         Err(Error::msg("No open session"))
