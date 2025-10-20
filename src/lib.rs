@@ -36,7 +36,9 @@ use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::client::Msg;
 use tokio::fs::File;
+use tokio::time::timeout;
 
+use log::debug;
 use log::info;
 
 pub struct Session {
@@ -724,13 +726,19 @@ async fn scp(
     let mut buffer = [0u8; 16 * 1024]; // 16KB buffer
     let mut reader = file;
 
+    const WRITE_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(16);
     loop {
         let bytes_read = reader.read(&mut buffer).await?;
         if bytes_read == 0 {
             break; // EOF
         }
 
-        state.write_data(&buffer[..bytes_read]).await?;
+        debug!("Writing {}bytes to {}", bytes_read, remote_path);
+        timeout(WRITE_TIMEOUT, state.write_data(&buffer[..bytes_read]))
+            .await
+            .map_err(|_| {
+                anyhow::anyhow!("Write operation timed out after {:?}", WRITE_TIMEOUT)
+            })??;
     }
 
     let state = state.eof().await?;
