@@ -28,6 +28,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::anyhow;
 use anyhow::Error;
 use anyhow::Result;
 use russh::keys::*;
@@ -717,28 +718,51 @@ async fn scp(
     let file_size = metadata.len();
     let file_name = std::path::Path::new(remote_path)
         .file_name()
-        .ok_or_else(|| anyhow::anyhow!("Invalid file name"))?
+        .ok_or_else(|| anyhow!("Invalid file name"))?
         .to_string_lossy();
 
     let mut state = state.write_metadata(file_size, &file_name).await?;
 
-    // Send the file contents in 16KB chunks
-    let mut buffer = [0u8; 16 * 1024]; // 16KB buffer
+    const WRITE_TIMEOUT: Duration = Duration::from_secs(16);
+    const DRAIN_TIMEOUT: Duration = Duration::from_millis(10);
+    let mut buffer = [0u8; 16 * 1024];
     let mut reader = file;
 
-    const WRITE_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(16);
     loop {
         let bytes_read = reader.read(&mut buffer).await?;
         if bytes_read == 0 {
-            break; // EOF
+            break;
         }
 
-        debug!("Writing {}bytes to {}", bytes_read, remote_path);
+        debug!("Writing {} bytes to {}", bytes_read, remote_path);
         timeout(WRITE_TIMEOUT, state.write_data(&buffer[..bytes_read]))
             .await
-            .map_err(|_| {
-                anyhow::anyhow!("Write operation timed out after {:?}", WRITE_TIMEOUT)
-            })??;
+            .map_err(|_| anyhow!("Write timed out after {:?}", WRITE_TIMEOUT))??;
+
+        // Drain remote responses to avoid SSH channel backpressure
+        loop {
+            match timeout(DRAIN_TIMEOUT, state.channel.wait()).await {
+                Ok(Some(ChannelMsg::ExtendedData { data, ext })) if ext == 1 => {
+                    return Err(anyhow!(
+                        "Remote SCP error: {}",
+                        String::from_utf8_lossy(&data)
+                    ));
+                }
+                Ok(Some(ChannelMsg::ExitStatus { exit_status })) => {
+                    return Err(anyhow!(
+                        "Remote SCP exited early with code: {}",
+                        exit_status
+                    ));
+                }
+                Ok(Some(_)) => {
+                    // Ignore other message types (like window adjust or keepalive)
+                }
+                Ok(None) | Err(_) => {
+                    // Either the channel closed or timeout expired — no more messages to drain
+                    break;
+                }
+            }
+        }
     }
 
     let state = state.eof().await?;
