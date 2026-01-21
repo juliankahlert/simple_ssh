@@ -34,7 +34,7 @@ use anyhow::Error;
 use anyhow::Result;
 use russh::keys::*;
 use russh::*;
-use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::client::Msg;
 use tokio::fs::File;
@@ -668,11 +668,8 @@ impl SCPStateOpen {
             return Err(Error::msg(format!("SCP start failed: {:?}", data)));
         }
 
-        let writer = Box::pin(self.channel.make_writer());
-
         Ok(SCPStateTxStart {
             channel: self.channel,
-            writer,
         })
     }
 }
@@ -686,17 +683,14 @@ async fn scp_channel_open(session: &mut client::Handle<Client>) -> Result<SCPSta
     }
 }
 
-use std::pin::Pin;
 struct SCPStateTxStart {
     channel: Channel<Msg>,
-    writer: Pin<Box<dyn AsyncWrite + Send>>,
 }
 
 impl SCPStateTxStart {
     async fn write_metadata(mut self, file_size: u64, file_name: &str) -> Result<SCPStateTxData> {
         let metadata_msg = format!("C0644 {} {}\n", file_size, file_name);
-        self.writer.write_all(metadata_msg.as_bytes()).await?;
-        self.writer.flush().await?;
+        self.channel.data(metadata_msg.as_bytes()).await?;
 
         let data = wait_for_data(&mut self.channel).await?;
         if data[0] != 0 {
@@ -705,27 +699,22 @@ impl SCPStateTxStart {
 
         Ok(SCPStateTxData {
             channel: self.channel,
-            writer: self.writer,
         })
     }
 }
 
 struct SCPStateTxData {
     channel: Channel<Msg>,
-    writer: Pin<Box<dyn AsyncWrite + Send>>,
 }
 
 impl SCPStateTxData {
     async fn write_data(&mut self, buf: &[u8]) -> Result<()> {
-        self.writer.write_all(buf).await?;
-        self.writer.flush().await?;
-
+        self.channel.data(buf).await?;
         Ok(())
     }
 
     async fn eof(mut self) -> Result<SCPStateEOF> {
-        self.writer.write_all(b"\0").await?;
-        self.writer.flush().await?;
+        self.channel.data(&b"\0"[..]).await?;
         let data = wait_for_data(&mut self.channel).await?;
         if data[0] != 0 {
             return Err(Error::msg(format!(
@@ -772,44 +761,60 @@ async fn scp(
     let mut state = state.write_metadata(file_size, &file_name).await?;
 
     const WRITE_TIMEOUT: Duration = Duration::from_secs(16);
-    const DRAIN_TIMEOUT: Duration = Duration::from_millis(10);
     let mut buffer = [0u8; 16 * 1024];
     let mut reader = file;
 
+    let mut eof_reached = false;
+
     loop {
-        let bytes_read = reader.read(&mut buffer).await?;
-        if bytes_read == 0 {
-            break;
-        }
-
-        debug!("Writing {} bytes to {}", bytes_read, remote_path);
-        timeout(WRITE_TIMEOUT, state.write_data(&buffer[..bytes_read]))
-            .await
-            .map_err(|_| anyhow!("Write timed out after {:?}", WRITE_TIMEOUT))??;
-
-        // Drain remote responses to avoid SSH channel backpressure
-        loop {
-            match timeout(DRAIN_TIMEOUT, state.channel.wait()).await {
-                Ok(Some(ChannelMsg::ExtendedData { data, ext })) if ext == 1 => {
-                    return Err(anyhow!(
-                        "Remote SCP error: {}",
-                        String::from_utf8_lossy(&data)
-                    ));
-                }
-                Ok(Some(ChannelMsg::ExitStatus { exit_status })) => {
-                    return Err(anyhow!(
-                        "Remote SCP exited early with code: {}",
-                        exit_status
-                    ));
-                }
-                Ok(Some(_)) => {
-                    // Ignore other message types (like window adjust or keepalive)
-                }
-                Ok(None) | Err(_) => {
-                    // Either the channel closed or timeout expired — no more messages to drain
-                    break;
+        tokio::select! {
+            // Read from file and send data
+            result = reader.read(&mut buffer), if !eof_reached => {
+                match result {
+                    Ok(0) => {
+                        // EOF reached, mark it but continue processing channel messages
+                        eof_reached = true;
+                    }
+                    Ok(n) => {
+                        debug!("Writing {} bytes to {}", n, remote_path);
+                        // Apply timeout only to the write operation
+                        timeout(WRITE_TIMEOUT, state.write_data(&buffer[..n]))
+                            .await
+                            .map_err(|_| anyhow!("Write timed out after {:?}", WRITE_TIMEOUT))??;
+                    }
+                    Err(e) => return Err(e.into()),
                 }
             }
+
+            // Handle SSH channel messages (window adjust, errors, etc.)
+            msg = state.channel.wait() => {
+                match msg {
+                    Some(ChannelMsg::ExtendedData { data, ext }) if ext == 1 => {
+                        return Err(anyhow!(
+                            "Remote SCP error: {}",
+                            String::from_utf8_lossy(&data)
+                        ));
+                    }
+                    Some(ChannelMsg::ExitStatus { exit_status }) => {
+                        return Err(anyhow!(
+                            "Remote SCP exited early with code: {}",
+                            exit_status
+                        ));
+                    }
+                    Some(_) => {
+                        // Window adjust, keepalive, or other protocol messages - ignore
+                    }
+                    None => {
+                        // Channel closed unexpectedly
+                        return Err(anyhow!("Channel closed during transfer"));
+                    }
+                }
+            }
+        }
+
+        // Exit the loop after EOF and all pending operations complete
+        if eof_reached {
+            break;
         }
     }
 
