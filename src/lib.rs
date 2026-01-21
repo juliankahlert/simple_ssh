@@ -24,6 +24,7 @@
 
 use std::convert::TryFrom;
 use std::env;
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -42,6 +43,25 @@ use tokio::time::timeout;
 use log::debug;
 use log::info;
 
+fn resolve_socket_addr(host: &str, port: u16, scope: Option<&str>) -> Result<SocketAddr> {
+    let host_with_scope = if let Some(scope_id) = scope {
+        format!("{}%{}", host, scope_id)
+    } else {
+        host.to_string()
+    };
+
+    match (host_with_scope.as_str(), port).to_socket_addrs() {
+        Ok(mut addrs) => {
+            if let Some(addr) = addrs.next() {
+                Ok(addr)
+            } else {
+                Err(anyhow!("No socket addresses resolved for {}", host))
+            }
+        }
+        Err(e) => Err(anyhow!("Failed to resolve host '{}': {}", host, e)),
+    }
+}
+
 pub struct Session {
     inner: SessionInner,
 }
@@ -56,6 +76,7 @@ impl<'sb> Session {
             cert: None,
             key: None,
             port: 22,
+            scope: None,
         }
     }
 
@@ -104,6 +125,7 @@ pub struct SessionBuilder<'sb> {
     user: &'sb str,
     host: &'sb str,
     port: u16,
+    scope: Option<String>,
 }
 
 impl<'sb> SessionBuilder<'sb> {
@@ -147,6 +169,10 @@ impl<'sb> SessionBuilder<'sb> {
         self.passwd = passwd;
         self
     }
+    pub fn with_scope(mut self, scope: &str) -> Self {
+        self.scope = Some(scope.to_string());
+        self
+    }
     pub fn build(self) -> Result<Session> {
         if let Some(key) = self.key {
             return Ok(Session {
@@ -159,6 +185,7 @@ impl<'sb> SessionBuilder<'sb> {
                         port: self.port,
                         cert: self.cert,
                         key,
+                        scope: self.scope,
                     },
                 },
             });
@@ -172,6 +199,7 @@ impl<'sb> SessionBuilder<'sb> {
                         cmdv: self.cmdv,
                         port: self.port,
                         passwd,
+                        scope: self.scope,
                     },
                 },
             });
@@ -184,6 +212,7 @@ impl<'sb> SessionBuilder<'sb> {
                         host: self.host.to_string(),
                         cmdv: self.cmdv,
                         port: self.port,
+                        scope: self.scope,
                     },
                 },
             });
@@ -211,6 +240,7 @@ struct SessionDataPasswd {
     user: String,
     host: String,
     port: u16,
+    scope: Option<String>,
 }
 
 #[derive(Clone)]
@@ -221,6 +251,7 @@ struct SessionDataPubKey {
     host: String,
     key: PathBuf,
     port: u16,
+    scope: Option<String>,
 }
 
 #[derive(Clone)]
@@ -229,6 +260,7 @@ struct SessionDataNoAuth {
     user: String,
     host: String,
     port: u16,
+    scope: Option<String>,
 }
 
 enum SessionInner {
@@ -347,7 +379,7 @@ impl SessionInner {
             };
             let config = Arc::new(config);
             let sh = Client {};
-            let addrs = (data.host.clone(), data.port);
+            let addrs = resolve_socket_addr(&data.host, data.port, data.scope.as_deref())?;
             let mut session = client::connect(config, addrs, sh).await?;
 
             info!(
@@ -376,7 +408,7 @@ impl SessionInner {
             };
             let config = Arc::new(config);
             let sh = Client {};
-            let addrs = (data.host.clone(), data.port);
+            let addrs = resolve_socket_addr(&data.host, data.port, data.scope.as_deref())?;
             let mut session = client::connect(config, addrs, sh).await?;
 
             info!(
@@ -416,7 +448,7 @@ impl SessionInner {
 
             let config = Arc::new(config);
             let sh = Client {};
-            let addrs = (data.host.clone(), data.port);
+            let addrs = resolve_socket_addr(&data.host, data.port, data.scope.as_deref())?;
             let mut session = client::connect(config, addrs, sh).await?;
 
             info!(
