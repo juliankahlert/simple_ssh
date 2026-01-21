@@ -79,12 +79,7 @@ enum AuthMethod {
     None,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    env_logger::init();
-
-    let args = Args::parse();
-
+fn build_session_from_args(args: &Args) -> Result<Session> {
     let mut session = Session::init()
         .with_host(&args.host)
         .with_user(&args.user)
@@ -98,26 +93,44 @@ async fn main() -> Result<()> {
         Some(AuthMethod::Password) => {
             let passwd = args
                 .passwd
+                .as_ref()
                 .ok_or_else(|| anyhow!("Password authentication requires --passwd option"))?;
-            session = session.with_passwd(&passwd);
+            session = session.with_passwd(passwd);
         }
         Some(AuthMethod::Key) => {
             let key = args
                 .key
+                .as_ref()
                 .ok_or_else(|| anyhow!("Key authentication requires --key option"))?;
-            session = session.with_key(key);
+            session = session.with_key(key.clone());
         }
         Some(AuthMethod::None) => {}
         None => {
-            if let Some(key) = args.key {
-                session = session.with_key(key);
-            } else if let Some(passwd) = args.passwd {
-                session = session.with_passwd(&passwd);
+            if let Some(key) = &args.key {
+                session = session.with_key(key.clone());
+            } else if let Some(passwd) = &args.passwd {
+                session = session.with_passwd(passwd);
             }
         }
     }
 
-    let session = session.build()?;
+    session.build()
+}
+
+fn command_from_args(args: &Args) -> String {
+    args.command.join(" ")
+}
+
+fn has_command(args: &Args) -> bool {
+    !args.command.is_empty()
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    env_logger::init();
+
+    let args = Args::parse();
+    let session = build_session_from_args(&args)?;
 
     let mut ssh = match timeout(Duration::from_secs(30), session.connect()).await {
         Ok(Ok(s)) => s,
@@ -125,10 +138,10 @@ async fn main() -> Result<()> {
         Err(_) => return Err(anyhow!("Connection timed out")),
     };
 
-    if args.command.is_empty() {
-        interactive_shell(&mut ssh).await?;
+    if has_command(&args) {
+        non_interactive(&mut ssh, &command_from_args(&args)).await?;
     } else {
-        non_interactive(&mut ssh, &args.command).await?;
+        interactive_shell(&mut ssh).await?;
     }
 
     ssh.close().await?;
@@ -141,8 +154,8 @@ async fn interactive_shell(ssh: &mut Session) -> Result<u32> {
     Ok(exit_code)
 }
 
-async fn non_interactive(ssh: &mut Session, command: &[String]) -> Result<u32> {
-    let exit_code = ssh.cmd(&command.join(" ")).await?;
+async fn non_interactive(ssh: &mut Session, command: &str) -> Result<u32> {
+    let exit_code = ssh.cmd(command).await?;
     Ok(exit_code)
 }
 
@@ -257,5 +270,146 @@ mod tests {
     fn test_empty_command_vec() {
         let args = Args::parse_from(&["simple-ssh", "-H", "localhost"]);
         assert!(args.command.is_empty());
+    }
+
+    #[test]
+    fn test_build_session_from_args_password() {
+        let args = Args::parse_from(&[
+            "simple-ssh",
+            "-H",
+            "testhost",
+            "-u",
+            "testuser",
+            "-p",
+            "2222",
+            "-P",
+            "password",
+        ]);
+        let session = build_session_from_args(&args);
+        assert!(session.is_ok());
+    }
+
+    #[test]
+    fn test_build_session_from_args_key() {
+        let args = Args::parse_from(&[
+            "simple-ssh",
+            "-H",
+            "testhost",
+            "-u",
+            "testuser",
+            "-k",
+            "/path/to/key",
+        ]);
+        let session = build_session_from_args(&args);
+        assert!(session.is_ok());
+    }
+
+    #[test]
+    fn test_build_session_from_args_with_scope() {
+        let args = Args::parse_from(&[
+            "simple-ssh",
+            "-H",
+            "fe80::1",
+            "--scope",
+            "eth0",
+            "-P",
+            "pass",
+        ]);
+        let session = build_session_from_args(&args);
+        assert!(session.is_ok());
+    }
+
+    #[test]
+    fn test_build_session_from_args_no_auth() {
+        let args = Args::parse_from(&["simple-ssh", "-H", "testhost", "-u", "testuser"]);
+        let session = build_session_from_args(&args);
+        assert!(session.is_ok());
+    }
+
+    #[test]
+    fn test_build_session_auth_password_explicit() {
+        let args = Args::parse_from(&[
+            "simple-ssh",
+            "-H",
+            "testhost",
+            "--auth",
+            "password",
+            "-P",
+            "mypass",
+        ]);
+        let session = build_session_from_args(&args);
+        assert!(session.is_ok());
+    }
+
+    #[test]
+    fn test_build_session_auth_key_explicit() {
+        let args = Args::parse_from(&[
+            "simple-ssh",
+            "-H",
+            "testhost",
+            "--auth",
+            "key",
+            "-i",
+            "/path/to/key",
+        ]);
+        let session = build_session_from_args(&args);
+        assert!(session.is_ok());
+    }
+
+    #[test]
+    fn test_build_session_auth_none_explicit() {
+        let args = Args::parse_from(&["simple-ssh", "-H", "testhost", "--auth", "none"]);
+        let session = build_session_from_args(&args);
+        assert!(session.is_ok());
+    }
+
+    #[test]
+    fn test_build_session_error_missing_password() {
+        let args = Args::parse_from(&["simple-ssh", "-H", "testhost", "--auth", "password"]);
+        let session = build_session_from_args(&args);
+        assert!(session.is_err());
+        if let Err(e) = session {
+            assert!(e.to_string().contains("Password authentication requires"));
+        }
+    }
+
+    #[test]
+    fn test_build_session_error_missing_key() {
+        let args = Args::parse_from(&["simple-ssh", "-H", "testhost", "--auth", "key"]);
+        let session = build_session_from_args(&args);
+        assert!(session.is_err());
+        if let Err(e) = session {
+            assert!(e.to_string().contains("Key authentication requires"));
+        }
+    }
+
+    #[test]
+    fn test_command_from_args_empty() {
+        let args = Args::parse_from(&["simple-ssh", "-H", "localhost"]);
+        assert_eq!(command_from_args(&args), "");
+    }
+
+    #[test]
+    fn test_command_from_args_single() {
+        let args = Args::parse_from(&["simple-ssh", "-H", "localhost", "ls"]);
+        assert_eq!(command_from_args(&args), "ls");
+    }
+
+    #[test]
+    fn test_command_from_args_multiple() {
+        let args = Args::parse_from(&["simple-ssh", "-H", "localhost", "echo", "hello", "world"]);
+        assert_eq!(command_from_args(&args), "echo hello world");
+    }
+
+    #[test]
+    fn test_has_command_true() {
+        let args = Args::parse_from(&["simple-ssh", "-H", "localhost", "ls"]);
+        assert!(has_command(&args));
+    }
+
+    #[test]
+    fn test_has_command_false() {
+        let args = Args::parse_from(&["simple-ssh", "-H", "localhost"]);
+        assert!(!has_command(&args));
     }
 }

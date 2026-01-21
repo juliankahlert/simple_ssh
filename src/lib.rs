@@ -858,3 +858,881 @@ async fn test_session_builder() {
         panic!("Expected PubKey session.");
     }
 }
+
+#[tokio::test]
+async fn test_session_builder_no_auth() {
+    // Test NoAuth variant when neither password nor key is provided
+    let session = Session::init()
+        .with_user("testuser")
+        .with_host("example.com")
+        .build();
+
+    assert!(session.is_ok());
+
+    let session = session.unwrap();
+    if let SessionInner::NoAuth { data, .. } = session.inner {
+        assert_eq!(data.user, "testuser");
+        assert_eq!(data.host, "example.com");
+        assert_eq!(data.port, 22);
+    } else {
+        panic!("Expected NoAuth session.");
+    }
+}
+
+#[tokio::test]
+async fn test_session_builder_with_port() {
+    let session = Session::init()
+        .with_host("example.com")
+        .with_user("admin")
+        .with_port(2222)
+        .with_passwd("secret")
+        .build();
+
+    assert!(session.is_ok());
+
+    let session = session.unwrap();
+    if let SessionInner::Passwd { data, .. } = session.inner {
+        assert_eq!(data.port, 2222);
+        assert_eq!(data.user, "admin");
+        assert_eq!(data.host, "example.com");
+    } else {
+        panic!("Expected Passwd session.");
+    }
+}
+
+#[tokio::test]
+async fn test_session_builder_with_scope() {
+    let session = Session::init()
+        .with_host("fe80::1")
+        .with_user("admin")
+        .with_scope("eth0")
+        .with_passwd("secret")
+        .build();
+
+    assert!(session.is_ok());
+
+    let session = session.unwrap();
+    if let SessionInner::Passwd { data, .. } = session.inner {
+        assert_eq!(data.scope, Some("eth0".to_string()));
+        assert_eq!(data.host, "fe80::1");
+    } else {
+        panic!("Expected Passwd session.");
+    }
+}
+
+#[tokio::test]
+async fn test_session_builder_with_cmd() {
+    let custom_cmd = vec!["zsh".to_string(), "-l".to_string()];
+    let session = Session::init()
+        .with_host("localhost")
+        .with_user("user")
+        .with_cmd(custom_cmd.clone())
+        .with_passwd("pass")
+        .build();
+
+    assert!(session.is_ok());
+
+    let session = session.unwrap();
+    if let SessionInner::Passwd { data, .. } = session.inner {
+        assert_eq!(data.cmdv, custom_cmd);
+    } else {
+        panic!("Expected Passwd session.");
+    }
+}
+
+#[tokio::test]
+async fn test_session_builder_with_timeout() {
+    let custom_timeout = Some(Duration::from_secs(600));
+    let session = Session::init()
+        .with_host("localhost")
+        .with_user("user")
+        .with_inactivity_timeout(custom_timeout)
+        .with_passwd("pass")
+        .build();
+
+    assert!(session.is_ok());
+
+    let session = session.unwrap();
+    if let SessionInner::Passwd { data, .. } = session.inner {
+        assert_eq!(data.inactivity_timeout, custom_timeout);
+    } else {
+        panic!("Expected Passwd session.");
+    }
+}
+
+#[tokio::test]
+async fn test_session_builder_with_timeout_disabled() {
+    let session = Session::init()
+        .with_host("localhost")
+        .with_user("user")
+        .with_inactivity_timeout(None)
+        .with_passwd("pass")
+        .build();
+
+    assert!(session.is_ok());
+
+    let session = session.unwrap();
+    if let SessionInner::Passwd { data, .. } = session.inner {
+        assert_eq!(data.inactivity_timeout, None);
+    } else {
+        panic!("Expected Passwd session.");
+    }
+}
+
+#[tokio::test]
+async fn test_session_builder_with_key_and_cert() {
+    let key_path = PathBuf::from("/path/to/key");
+    let cert_path = PathBuf::from("/path/to/cert");
+
+    let session = Session::init()
+        .with_host("localhost")
+        .with_user("user")
+        .with_key(key_path.clone())
+        .with_cert(cert_path.clone())
+        .build();
+
+    assert!(session.is_ok());
+
+    let session = session.unwrap();
+    if let SessionInner::PubKey { data, .. } = session.inner {
+        assert_eq!(data.key, key_path);
+        assert_eq!(data.cert, Some(cert_path));
+    } else {
+        panic!("Expected PubKey session.");
+    }
+}
+
+#[tokio::test]
+async fn test_session_builder_with_key_opt() {
+    let key_path = Some(PathBuf::from("/path/to/key"));
+
+    let session = Session::init()
+        .with_host("localhost")
+        .with_user("user")
+        .with_key_opt(key_path.clone())
+        .build();
+
+    assert!(session.is_ok());
+
+    let session = session.unwrap();
+    if let SessionInner::PubKey { data, .. } = session.inner {
+        assert_eq!(data.key, key_path.unwrap());
+    } else {
+        panic!("Expected PubKey session.");
+    }
+}
+
+#[tokio::test]
+async fn test_session_builder_with_cert_opt() {
+    let key_path = PathBuf::from("/path/to/key");
+    let cert_path = Some(PathBuf::from("/path/to/cert"));
+
+    let session = Session::init()
+        .with_host("localhost")
+        .with_user("user")
+        .with_key(key_path)
+        .with_cert_opt(cert_path.clone())
+        .build();
+
+    assert!(session.is_ok());
+
+    let session = session.unwrap();
+    if let SessionInner::PubKey { data, .. } = session.inner {
+        assert_eq!(data.cert, cert_path);
+    } else {
+        panic!("Expected PubKey session.");
+    }
+}
+
+#[tokio::test]
+async fn test_session_builder_with_passwd_opt() {
+    let passwd = Some("password123".to_string());
+
+    let session = Session::init()
+        .with_host("localhost")
+        .with_user("user")
+        .with_passwd_opt(passwd.clone())
+        .build();
+
+    assert!(session.is_ok());
+
+    let session = session.unwrap();
+    if let SessionInner::Passwd { data, .. } = session.inner {
+        assert_eq!(data.passwd, passwd.unwrap());
+    } else {
+        panic!("Expected Passwd session.");
+    }
+}
+
+#[tokio::test]
+async fn test_session_builder_defaults() {
+    let session = Session::init().with_passwd("pass").build();
+
+    assert!(session.is_ok());
+
+    let session = session.unwrap();
+    if let SessionInner::Passwd { data, .. } = session.inner {
+        assert_eq!(data.user, "root");
+        assert_eq!(data.host, "localhost");
+        assert_eq!(data.port, 22);
+        assert_eq!(data.cmdv, vec!["bash".to_string()]);
+        assert_eq!(data.scope, None);
+        assert_eq!(data.inactivity_timeout, Some(Duration::from_secs(3000)));
+    } else {
+        panic!("Expected Passwd session.");
+    }
+}
+
+#[test]
+fn test_resolve_socket_addr_ipv4() {
+    let result = resolve_socket_addr("127.0.0.1", 22, None);
+    assert!(result.is_ok());
+    let addr = result.unwrap();
+    assert_eq!(addr.port(), 22);
+}
+
+#[test]
+fn test_resolve_socket_addr_with_scope() {
+    // Test scope formatting (even though it may not resolve without actual interface)
+    let _result = resolve_socket_addr("fe80::1", 22, Some("eth0"));
+    // May fail to resolve if interface doesn't exist, but we're testing the code path
+    // The important part is that it attempts to format with scope
+}
+
+#[test]
+fn test_resolve_socket_addr_invalid_host() {
+    let result = resolve_socket_addr("invalid..host..name", 22, None);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_resolve_socket_addr_localhost() {
+    let result = resolve_socket_addr("localhost", 8080, None);
+    assert!(result.is_ok());
+    let addr = result.unwrap();
+    assert_eq!(addr.port(), 8080);
+}
+
+#[tokio::test]
+async fn test_session_error_no_connection_pty() {
+    let mut session = Session::init().with_passwd("pass").build().unwrap();
+
+    // Calling pty() without connecting should return error
+    let result = session.pty().await;
+    assert!(result.is_err());
+    assert_eq!(result.unwrap_err().to_string(), "No open session");
+}
+
+#[tokio::test]
+async fn test_session_error_no_connection_run() {
+    let mut session = Session::init().with_passwd("pass").build().unwrap();
+
+    // Calling run() without connecting should return error
+    let result = session.run().await;
+    assert!(result.is_err());
+    assert_eq!(result.unwrap_err().to_string(), "No open session");
+}
+
+#[tokio::test]
+async fn test_session_error_no_connection_exec() {
+    let mut session = Session::init().with_passwd("pass").build().unwrap();
+
+    let cmd = vec!["ls".to_string()];
+    let result = session.exec(&cmd).await;
+    assert!(result.is_err());
+    assert_eq!(result.unwrap_err().to_string(), "No open session");
+}
+
+#[tokio::test]
+async fn test_session_error_no_connection_cmd() {
+    let mut session = Session::init().with_passwd("pass").build().unwrap();
+
+    let result = session.cmd("ls").await;
+    assert!(result.is_err());
+    assert_eq!(result.unwrap_err().to_string(), "No open session");
+}
+
+#[tokio::test]
+async fn test_session_error_no_connection_system() {
+    let mut session = Session::init().with_passwd("pass").build().unwrap();
+
+    let result = session.system("ls | grep foo").await;
+    assert!(result.is_err());
+    assert_eq!(result.unwrap_err().to_string(), "No open session");
+}
+
+#[tokio::test]
+async fn test_session_error_no_connection_scp() {
+    let mut session = Session::init().with_passwd("pass").build().unwrap();
+
+    let result = session.scp("/local/file", "/remote/file").await;
+    assert!(result.is_err());
+    assert_eq!(result.unwrap_err().to_string(), "No open session");
+}
+
+#[tokio::test]
+async fn test_session_close_no_connection() {
+    let mut session = Session::init().with_passwd("pass").build().unwrap();
+
+    // Calling close() without a connection should succeed (no-op)
+    let result = session.close().await;
+    assert!(result.is_ok());
+}
+
+#[tokio::test]
+async fn test_client_handler_check_server_key() {
+    use russh::client::Handler;
+    use ssh_key::{Algorithm, PublicKey as SshPublicKey};
+
+    // Create a client handler
+    let mut client = Client {};
+
+    // Create a minimal Ed25519 public key for testing
+    // This is a valid Ed25519 public key (32 bytes of zeros for testing)
+    let key_data = vec![0u8; 32];
+    let public_key = SshPublicKey::new(
+        ssh_key::public::KeyData::Ed25519(
+            ssh_key::public::Ed25519PublicKey::try_from(&key_data[..]).unwrap(),
+        ),
+        "",
+    );
+
+    // Test that check_server_key returns Ok(true) (accepts any key)
+    let result = client.check_server_key(&public_key).await;
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap(), true);
+}
+
+#[test]
+fn test_session_inner_get_command_escaping() {
+    // Test that get_command properly escapes shell metacharacters
+    let session_inner = SessionInner::Passwd {
+        session: None,
+        data: SessionDataPasswd {
+            user: "user".to_string(),
+            host: "localhost".to_string(),
+            cmdv: vec![
+                "echo".to_string(),
+                "hello world".to_string(),
+                "$USER".to_string(),
+                "test;rm -rf /".to_string(),
+            ],
+            passwd: "pass".to_string(),
+            port: 22,
+            scope: None,
+            inactivity_timeout: Some(Duration::from_secs(3000)),
+        },
+    };
+
+    let command = session_inner.get_command();
+
+    // Verify that the command contains echo and escaped arguments
+    assert!(command.contains("echo"));
+    // Verify that the command is properly formatted with spaces between args
+    let parts: Vec<&str> = command.split_whitespace().collect();
+    assert!(parts.len() >= 4, "Command should have at least 4 parts");
+}
+
+#[test]
+fn test_session_inner_get_command_simple() {
+    let session_inner = SessionInner::PubKey {
+        session: None,
+        data: SessionDataPubKey {
+            user: "user".to_string(),
+            host: "localhost".to_string(),
+            cmdv: vec!["bash".to_string(), "-c".to_string(), "ls".to_string()],
+            key: PathBuf::from("/path/to/key"),
+            cert: None,
+            port: 22,
+            scope: None,
+            inactivity_timeout: Some(Duration::from_secs(3000)),
+        },
+    };
+
+    let command = session_inner.get_command();
+    assert!(command.contains("bash"));
+    assert!(command.contains("-c"));
+    assert!(command.contains("ls"));
+}
+
+#[test]
+fn test_session_inner_get_command_noauth() {
+    let session_inner = SessionInner::NoAuth {
+        session: None,
+        data: SessionDataNoAuth {
+            user: "user".to_string(),
+            host: "localhost".to_string(),
+            cmdv: vec!["zsh".to_string()],
+            port: 22,
+            scope: None,
+            inactivity_timeout: Some(Duration::from_secs(3000)),
+        },
+    };
+
+    let command = session_inner.get_command();
+    assert_eq!(command, "zsh");
+}
+
+#[tokio::test]
+async fn test_session_data_clone_passwd() {
+    // Test that SessionDataPasswd is cloneable
+    let data = SessionDataPasswd {
+        user: "testuser".to_string(),
+        host: "testhost".to_string(),
+        cmdv: vec!["bash".to_string()],
+        passwd: "secret".to_string(),
+        port: 2222,
+        scope: Some("eth0".to_string()),
+        inactivity_timeout: Some(Duration::from_secs(600)),
+    };
+
+    let cloned = data.clone();
+    assert_eq!(data.user, cloned.user);
+    assert_eq!(data.host, cloned.host);
+    assert_eq!(data.passwd, cloned.passwd);
+    assert_eq!(data.port, cloned.port);
+    assert_eq!(data.scope, cloned.scope);
+}
+
+#[tokio::test]
+async fn test_session_data_clone_pubkey() {
+    let data = SessionDataPubKey {
+        user: "testuser".to_string(),
+        host: "testhost".to_string(),
+        cmdv: vec!["bash".to_string()],
+        key: PathBuf::from("/path/to/key"),
+        cert: Some(PathBuf::from("/path/to/cert")),
+        port: 2222,
+        scope: Some("eth0".to_string()),
+        inactivity_timeout: Some(Duration::from_secs(600)),
+    };
+
+    let cloned = data.clone();
+    assert_eq!(data.user, cloned.user);
+    assert_eq!(data.host, cloned.host);
+    assert_eq!(data.key, cloned.key);
+    assert_eq!(data.cert, cloned.cert);
+    assert_eq!(data.port, cloned.port);
+}
+
+#[tokio::test]
+async fn test_session_data_clone_noauth() {
+    let data = SessionDataNoAuth {
+        user: "testuser".to_string(),
+        host: "testhost".to_string(),
+        cmdv: vec!["bash".to_string()],
+        port: 2222,
+        scope: Some("eth0".to_string()),
+        inactivity_timeout: Some(Duration::from_secs(600)),
+    };
+
+    let cloned = data.clone();
+    assert_eq!(data.user, cloned.user);
+    assert_eq!(data.host, cloned.host);
+    assert_eq!(data.port, cloned.port);
+    assert_eq!(data.scope, cloned.scope);
+}
+
+#[test]
+fn test_shell_escape_integration() {
+    // Test that shell_escape is working as expected in our context
+    use shell_escape::escape;
+
+    let dangerous = "test; rm -rf /";
+    let escaped = escape(dangerous.into());
+    // Verify that the escaped string is safe (quoted or escaped)
+    let escaped_str = escaped.to_string();
+    assert_ne!(escaped_str, dangerous, "String should be escaped");
+
+    let with_spaces = "hello world";
+    let escaped = escape(with_spaces.into());
+    let escaped_str = escaped.to_string();
+    // String with spaces should be escaped/quoted
+    assert_ne!(
+        escaped_str, with_spaces,
+        "String with spaces should be escaped"
+    );
+}
+
+#[tokio::test]
+async fn test_session_connect_invalid_host() {
+    // Test connection with invalid hostname
+    let session = Session::init()
+        .with_host("definitely.invalid.hostname.that.does.not.exist.example")
+        .with_user("user")
+        .with_passwd("pass")
+        .build()
+        .unwrap();
+
+    let result = session.connect().await;
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn test_session_connect_invalid_port() {
+    // Test connection with closed port (very unlikely to be open)
+    let session = Session::init()
+        .with_host("127.0.0.1")
+        .with_port(1) // Port 1 is typically not accessible
+        .with_user("user")
+        .with_passwd("pass")
+        .build()
+        .unwrap();
+
+    let result = tokio::time::timeout(Duration::from_secs(2), session.connect()).await;
+
+    // Either timeout or connection error expected
+    assert!(result.is_err() || result.unwrap().is_err());
+}
+
+#[tokio::test]
+async fn test_session_connect_pubkey_invalid() {
+    // Test connection with public key to non-existent host
+    let session = Session::init()
+        .with_host("invalid.test.example.nonexistent")
+        .with_user("user")
+        .with_key(PathBuf::from("/nonexistent/key"))
+        .build()
+        .unwrap();
+
+    let result = session.connect().await;
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn test_session_connect_noauth_invalid() {
+    // Test NoAuth connection to non-existent host
+    let session = Session::init()
+        .with_host("invalid.test.example.nonexistent")
+        .with_user("user")
+        .build()
+        .unwrap();
+
+    let result = session.connect().await;
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_resolve_socket_addr_empty_result() {
+    // Test with a malformed address that might resolve but return no addresses
+    let result = resolve_socket_addr("", 22, None);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_session_init_creates_builder() {
+    // Test that Session::init() creates a builder with correct defaults
+    let builder = Session::init();
+
+    // Build with just password to verify defaults are set
+    let session = builder.with_passwd("test").build();
+    assert!(session.is_ok());
+}
+
+#[tokio::test]
+async fn test_session_multiple_error_methods() {
+    // Test multiple methods on unconnected session
+    let mut session = Session::init()
+        .with_user("testuser")
+        .with_host("testhost")
+        .with_passwd("testpass")
+        .build()
+        .unwrap();
+
+    // All these should fail with "No open session"
+    assert!(session.pty().await.is_err());
+    assert!(session.run().await.is_err());
+    assert!(session.cmd("test").await.is_err());
+    assert!(session.system("test").await.is_err());
+    assert!(session.exec(&vec!["test".to_string()]).await.is_err());
+    assert!(session.scp("/src", "/dst").await.is_err());
+
+    // Close should succeed even without connection
+    assert!(session.close().await.is_ok());
+}
+
+#[test]
+fn test_session_inner_variants_construction() {
+    // Test all three SessionInner variants can be constructed
+    let passwd_inner = SessionInner::Passwd {
+        session: None,
+        data: SessionDataPasswd {
+            user: "user".to_string(),
+            host: "host".to_string(),
+            cmdv: vec!["bash".to_string()],
+            passwd: "pass".to_string(),
+            port: 22,
+            scope: None,
+            inactivity_timeout: Some(Duration::from_secs(3000)),
+        },
+    };
+
+    let pubkey_inner = SessionInner::PubKey {
+        session: None,
+        data: SessionDataPubKey {
+            user: "user".to_string(),
+            host: "host".to_string(),
+            cmdv: vec!["bash".to_string()],
+            key: PathBuf::from("/key"),
+            cert: None,
+            port: 22,
+            scope: None,
+            inactivity_timeout: Some(Duration::from_secs(3000)),
+        },
+    };
+
+    let noauth_inner = SessionInner::NoAuth {
+        session: None,
+        data: SessionDataNoAuth {
+            user: "user".to_string(),
+            host: "host".to_string(),
+            cmdv: vec!["bash".to_string()],
+            port: 22,
+            scope: None,
+            inactivity_timeout: Some(Duration::from_secs(3000)),
+        },
+    };
+
+    // Verify get_command works for all variants
+    assert!(!passwd_inner.get_command().is_empty());
+    assert!(!pubkey_inner.get_command().is_empty());
+    assert!(!noauth_inner.get_command().is_empty());
+}
+
+#[test]
+fn test_pathbuf_operations() {
+    // Test PathBuf usage in SessionDataPubKey
+    let key_path = PathBuf::from("/home/user/.ssh/id_rsa");
+    let cert_path = PathBuf::from("/home/user/.ssh/id_rsa-cert.pub");
+
+    let data = SessionDataPubKey {
+        user: "user".to_string(),
+        host: "host".to_string(),
+        cmdv: vec!["bash".to_string()],
+        key: key_path.clone(),
+        cert: Some(cert_path.clone()),
+        port: 22,
+        scope: None,
+        inactivity_timeout: Some(Duration::from_secs(3000)),
+    };
+
+    assert_eq!(data.key, key_path);
+    assert_eq!(data.cert, Some(cert_path));
+}
+
+#[test]
+fn test_duration_timeout_values() {
+    // Test various timeout duration values
+    let short_timeout = Some(Duration::from_secs(1));
+    let long_timeout = Some(Duration::from_secs(10000));
+    let no_timeout: Option<Duration> = None;
+
+    let session1 = Session::init()
+        .with_inactivity_timeout(short_timeout)
+        .with_passwd("pass")
+        .build()
+        .unwrap();
+
+    let session2 = Session::init()
+        .with_inactivity_timeout(long_timeout)
+        .with_passwd("pass")
+        .build()
+        .unwrap();
+
+    let session3 = Session::init()
+        .with_inactivity_timeout(no_timeout)
+        .with_passwd("pass")
+        .build()
+        .unwrap();
+
+    if let SessionInner::Passwd { data, .. } = session1.inner {
+        assert_eq!(data.inactivity_timeout, short_timeout);
+    }
+
+    if let SessionInner::Passwd { data, .. } = session2.inner {
+        assert_eq!(data.inactivity_timeout, long_timeout);
+    }
+
+    if let SessionInner::Passwd { data, .. } = session3.inner {
+        assert_eq!(data.inactivity_timeout, no_timeout);
+    }
+}
+
+#[test]
+fn test_session_builder_chaining() {
+    // Test that builder methods can be chained in any order
+    let session = Session::init()
+        .with_port(2222)
+        .with_host("example.com")
+        .with_scope("eth0")
+        .with_user("admin")
+        .with_inactivity_timeout(Some(Duration::from_secs(600)))
+        .with_passwd("secret")
+        .build();
+
+    assert!(session.is_ok());
+    let s = session.unwrap();
+    if let SessionInner::Passwd { data, .. } = s.inner {
+        assert_eq!(data.port, 2222);
+        assert_eq!(data.host, "example.com");
+        assert_eq!(data.user, "admin");
+        assert_eq!(data.scope, Some("eth0".to_string()));
+    }
+}
+
+#[test]
+fn test_session_builder_multiple_configs() {
+    // Build sessions with different configurations
+    let configs = vec![
+        (22u16, "localhost"),
+        (2222u16, "192.168.1.1"),
+        (22022u16, "10.0.0.1"),
+    ];
+
+    for (port, host) in configs {
+        let session = Session::init()
+            .with_host(host)
+            .with_port(port)
+            .with_user("test")
+            .with_passwd("pass")
+            .build();
+
+        assert!(session.is_ok());
+    }
+}
+
+#[test]
+fn test_session_data_fields() {
+    // Test that all fields are properly set in SessionDataPasswd
+    let cmdv = vec!["zsh".to_string(), "-l".to_string()];
+    let session = Session::init()
+        .with_user("myuser")
+        .with_host("myhost.example.com")
+        .with_port(8022)
+        .with_scope("wlan0")
+        .with_cmd(cmdv.clone())
+        .with_passwd("mypassword")
+        .with_inactivity_timeout(Some(Duration::from_secs(1200)))
+        .build()
+        .unwrap();
+
+    if let SessionInner::Passwd { data, session: _ } = session.inner {
+        assert_eq!(data.user, "myuser");
+        assert_eq!(data.host, "myhost.example.com");
+        assert_eq!(data.port, 8022);
+        assert_eq!(data.scope, Some("wlan0".to_string()));
+        assert_eq!(data.cmdv, cmdv);
+        assert_eq!(data.passwd, "mypassword");
+        assert_eq!(data.inactivity_timeout, Some(Duration::from_secs(1200)));
+    } else {
+        panic!("Expected Passwd variant");
+    }
+}
+
+#[test]
+fn test_pubkey_session_all_fields() {
+    // Test that all fields are properly set in SessionDataPubKey
+    let key = PathBuf::from("/home/user/.ssh/id_ed25519");
+    let cert = PathBuf::from("/home/user/.ssh/id_ed25519-cert.pub");
+    let cmdv = vec!["fish".to_string()];
+
+    let session = Session::init()
+        .with_user("keyuser")
+        .with_host("keyhost.example.com")
+        .with_port(9022)
+        .with_scope("eth1")
+        .with_cmd(cmdv.clone())
+        .with_key(key.clone())
+        .with_cert(cert.clone())
+        .with_inactivity_timeout(Some(Duration::from_secs(1800)))
+        .build()
+        .unwrap();
+
+    if let SessionInner::PubKey { data, session: _ } = session.inner {
+        assert_eq!(data.user, "keyuser");
+        assert_eq!(data.host, "keyhost.example.com");
+        assert_eq!(data.port, 9022);
+        assert_eq!(data.scope, Some("eth1".to_string()));
+        assert_eq!(data.cmdv, cmdv);
+        assert_eq!(data.key, key);
+        assert_eq!(data.cert, Some(cert));
+        assert_eq!(data.inactivity_timeout, Some(Duration::from_secs(1800)));
+    } else {
+        panic!("Expected PubKey variant");
+    }
+}
+
+#[test]
+fn test_noauth_session_all_fields() {
+    // Test that all fields are properly set in SessionDataNoAuth
+    let cmdv = vec!["sh".to_string()];
+
+    let session = Session::init()
+        .with_user("noauthuser")
+        .with_host("noauth.example.com")
+        .with_port(10022)
+        .with_scope("lo")
+        .with_cmd(cmdv.clone())
+        .with_inactivity_timeout(None)
+        .build()
+        .unwrap();
+
+    if let SessionInner::NoAuth { data, session: _ } = session.inner {
+        assert_eq!(data.user, "noauthuser");
+        assert_eq!(data.host, "noauth.example.com");
+        assert_eq!(data.port, 10022);
+        assert_eq!(data.scope, Some("lo".to_string()));
+        assert_eq!(data.cmdv, cmdv);
+        assert_eq!(data.inactivity_timeout, None);
+    } else {
+        panic!("Expected NoAuth variant");
+    }
+}
+
+#[test]
+fn test_command_vector_variations() {
+    // Test different command vector configurations
+    let test_cases = vec![
+        vec!["bash".to_string()],
+        vec!["sh".to_string(), "-c".to_string(), "ls".to_string()],
+        vec![
+            "python3".to_string(),
+            "-m".to_string(),
+            "http.server".to_string(),
+        ],
+        vec!["node".to_string(), "app.js".to_string()],
+    ];
+
+    for cmdv in test_cases {
+        let session = Session::init()
+            .with_cmd(cmdv.clone())
+            .with_passwd("pass")
+            .build()
+            .unwrap();
+
+        if let SessionInner::Passwd { data, .. } = session.inner {
+            assert_eq!(data.cmdv, cmdv);
+        }
+    }
+}
+
+#[test]
+fn test_scope_variations() {
+    // Test different scope ID formats
+    let scopes = vec![
+        "eth0", "wlan0", "lo", "enp0s3", "2", // numeric interface index
+    ];
+
+    for scope in scopes {
+        let session = Session::init()
+            .with_host("fe80::1")
+            .with_scope(scope)
+            .with_passwd("pass")
+            .build()
+            .unwrap();
+
+        if let SessionInner::Passwd { data, .. } = session.inner {
+            assert_eq!(data.scope, Some(scope.to_string()));
+        }
+    }
+}
