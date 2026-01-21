@@ -131,7 +131,7 @@ async fn main() -> Result<()> {
     let local_path = args.local.to_string_lossy();
     println!("Transferring '{}' to '{}@{}:{}'", local_path, args.user, args.host, args.remote);
 
-    match timeout(Duration::from_secs(300), ssh.scp(&local_path, &args.remote)).await {
+    match timeout(Duration::from_secs(3000), ssh.scp(&local_path, &args.remote)).await {
         Ok(Ok(())) => {
             println!("File transferred successfully.");
         }

@@ -77,6 +77,7 @@ impl<'sb> Session {
             key: None,
             port: 22,
             scope: None,
+            inactivity_timeout: Some(Duration::from_secs(3000)),
         }
     }
 
@@ -126,6 +127,7 @@ pub struct SessionBuilder<'sb> {
     host: &'sb str,
     port: u16,
     scope: Option<String>,
+    inactivity_timeout: Option<Duration>,
 }
 
 impl<'sb> SessionBuilder<'sb> {
@@ -173,6 +175,10 @@ impl<'sb> SessionBuilder<'sb> {
         self.scope = Some(scope.to_string());
         self
     }
+    pub fn with_inactivity_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.inactivity_timeout = timeout;
+        self
+    }
     pub fn build(self) -> Result<Session> {
         if let Some(key) = self.key {
             return Ok(Session {
@@ -186,6 +192,7 @@ impl<'sb> SessionBuilder<'sb> {
                         cert: self.cert,
                         key,
                         scope: self.scope,
+                        inactivity_timeout: self.inactivity_timeout,
                     },
                 },
             });
@@ -200,6 +207,7 @@ impl<'sb> SessionBuilder<'sb> {
                         port: self.port,
                         passwd,
                         scope: self.scope,
+                        inactivity_timeout: self.inactivity_timeout,
                     },
                 },
             });
@@ -213,6 +221,7 @@ impl<'sb> SessionBuilder<'sb> {
                         cmdv: self.cmdv,
                         port: self.port,
                         scope: self.scope,
+                        inactivity_timeout: self.inactivity_timeout,
                     },
                 },
             });
@@ -241,6 +250,7 @@ struct SessionDataPasswd {
     host: String,
     port: u16,
     scope: Option<String>,
+    inactivity_timeout: Option<Duration>,
 }
 
 #[derive(Clone)]
@@ -252,6 +262,7 @@ struct SessionDataPubKey {
     key: PathBuf,
     port: u16,
     scope: Option<String>,
+    inactivity_timeout: Option<Duration>,
 }
 
 #[derive(Clone)]
@@ -261,6 +272,7 @@ struct SessionDataNoAuth {
     host: String,
     port: u16,
     scope: Option<String>,
+    inactivity_timeout: Option<Duration>,
 }
 
 enum SessionInner {
@@ -374,7 +386,7 @@ impl SessionInner {
     async fn connect_noauth(self) -> Result<Self> {
         if let Self::NoAuth { data, session: _ } = self {
             let config = client::Config {
-                inactivity_timeout: Some(Duration::from_secs(3000)),
+                inactivity_timeout: data.inactivity_timeout,
                 ..<_>::default()
             };
             let config = Arc::new(config);
@@ -403,7 +415,7 @@ impl SessionInner {
     async fn connect_passwd(self) -> Result<Self> {
         if let Self::Passwd { data, session: _ } = self {
             let config = client::Config {
-                inactivity_timeout: Some(Duration::from_secs(3000)),
+                inactivity_timeout: data.inactivity_timeout,
                 ..<_>::default()
             };
             let config = Arc::new(config);
@@ -442,7 +454,7 @@ impl SessionInner {
             }
 
             let config = client::Config {
-                inactivity_timeout: Some(Duration::from_secs(3000)),
+                inactivity_timeout: data.inactivity_timeout,
                 ..<_>::default()
             };
 
