@@ -7,6 +7,10 @@ edition = "2021"
 name = "simple-ssh"
 path = "src/bin/simple-ssh.rs"
 
+[[bin]]
+name = "simple-scp"
+path = "src/bin/simple-scp.rs"
+
 [profile.release]
 lto = true
 strip = true
