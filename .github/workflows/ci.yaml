@@ -8,6 +8,9 @@ on:
     branches:
       - main
 
+env:
+  CROSS_VERSION: "0.2.5"
+
 jobs:
   build-amd64:
     runs-on: ubuntu-latest
@@ -59,7 +62,7 @@ jobs:
           toolchain: stable
 
       - name: Install cross
-        run: cargo install cross
+        run: if ! command -v cross &> /dev/null; then cargo install cross --version "$CROSS_VERSION" --locked; fi
 
       - name: Set up musl target
         run: rustup target add i686-unknown-linux-musl
@@ -70,7 +73,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-registry-${{ env.CROSS_VERSION }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-registry-
 
@@ -103,12 +106,12 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             ~/.cargo/bin
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-registry-${{ env.CROSS_VERSION }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-registry-
 
       - name: Install cross
-        run: cargo install cross
+        run: if ! command -v cross &> /dev/null; then cargo install cross --version "$CROSS_VERSION" --locked; fi
 
       - name: Cache Cargo target
         uses: actions/cache@v4
@@ -139,12 +142,12 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             ~/.cargo/bin
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-registry-${{ env.CROSS_VERSION }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-registry-
 
       - name: Install cross
-        run: cargo install cross
+        run: if ! command -v cross &> /dev/null; then cargo install cross --version "$CROSS_VERSION" --locked; fi
 
       - name: Set up musl target
         run: rustup target add arm-unknown-linux-musleabihf
@@ -209,7 +212,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-registry-${{ env.CROSS_VERSION }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-registry-
 
