@@ -195,7 +195,7 @@ async fn main() -> Result<()> {
 ///
 /// * `ssh` - Connected SSH session
 async fn interactive_shell(ssh: &mut Session) -> Result<u32> {
-    let exit_code = ssh.pty().await?;
+    let exit_code = ssh.pty_builder().with_raw().run().await?;
     println!("\r\nConnection closed with exit code: {}", exit_code);
     Ok(exit_code)
 }

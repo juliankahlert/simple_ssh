@@ -22,9 +22,10 @@
  * SOFTWARE.
  */
 
-use std::convert::TryFrom;
 use std::env;
+use std::io::Write;
 use std::net::{SocketAddr, ToSocketAddrs};
+use std::panic;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -32,16 +33,65 @@ use std::time::Duration;
 use anyhow::anyhow;
 use anyhow::Error;
 use anyhow::Result;
-use russh::keys::*;
-use russh::*;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-use crate::client::Msg;
-use tokio::fs::File;
-use tokio::time::timeout;
-
+use crossterm::{
+    cursor::{SetCursorStyle, Show},
+    style::ResetColor,
+    terminal::{disable_raw_mode, enable_raw_mode, size},
+    Command,
+};
 use log::debug;
 use log::info;
+use russh::keys::*;
+use russh::*;
+use tokio::fs::File;
+use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::time::timeout;
+
+use crate::client::Msg;
+
+static PANIC_HOOK_SET: std::sync::Once = std::sync::Once::new();
+static PREV_PANIC_HOOK: std::sync::Mutex<
+    Option<Box<dyn Fn(&panic::PanicHookInfo<'_>) + Send + Sync>>,
+> = std::sync::Mutex::new(None);
+
+fn setup_panic_hook() {
+    PANIC_HOOK_SET.call_once(|| {
+        let prev_hook = panic::take_hook();
+        if let Ok(mut guard) = PREV_PANIC_HOOK.lock() {
+            *guard = Some(prev_hook);
+        }
+        panic::set_hook(Box::new(|panic_info| {
+            terminal_cleanup();
+            if let Ok(guard) = PREV_PANIC_HOOK.lock() {
+                if let Some(ref hook) = *guard {
+                    hook(panic_info);
+                }
+            }
+        }));
+    });
+}
+
+fn terminal_cleanup() {
+    let _ = disable_raw_mode();
+    let mut stdout = std::io::stdout();
+    let _ = stdout.write_all(&terminal_reset_bytes());
+    let _ = stdout.flush();
+}
+
+fn command_to_bytes<C: Command>(command: C) -> Vec<u8> {
+    let mut output = String::new();
+    let _ = command.write_ansi(&mut output);
+    output.into_bytes()
+}
+
+fn terminal_reset_bytes() -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&command_to_bytes(SetCursorStyle::DefaultUserShape));
+    bytes.extend_from_slice(&command_to_bytes(Show));
+    bytes.extend_from_slice(&command_to_bytes(ResetColor));
+    bytes.extend_from_slice(b"\r\n");
+    bytes
+}
 
 /// Resolves a hostname and port to a socket address.
 ///
@@ -149,6 +199,31 @@ impl<'sb> Session {
         self.inner.pty().await
     }
 
+    /// Creates a PTY builder for advanced terminal configuration.
+    ///
+    /// The builder provides options for raw mode, terminal type,
+    /// dimensions, and custom commands.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let exit_code = session.pty_builder()
+    ///     .with_raw()
+    ///     .with_term("xterm-256color")
+    ///     .run().await?;
+    /// ```
+    pub fn pty_builder(&mut self) -> PtyBuilder<'_> {
+        let (width, height) = size().unwrap_or((80, 24));
+        PtyBuilder {
+            session: self,
+            raw_mode: false,
+            term: env::var("TERM").unwrap_or_else(|_| "xterm".to_string()),
+            width: width as u32,
+            height: height as u32,
+            command: None,
+        }
+    }
+
     /// Runs the configured command with output to stdout and stderr.
     ///
     /// Uses the command specified via [`SessionBuilder::with_cmd`].
@@ -240,6 +315,109 @@ impl<'sb> Session {
     /// Returns an error if the disconnect message fails to send.
     pub async fn close(&mut self) -> Result<()> {
         self.inner.close().await
+    }
+}
+
+/// Builder for configuring and executing PTY sessions with advanced options.
+///
+/// Use [`Session::pty_builder`] to create a new builder, then chain
+/// configuration methods, and finally call [`PtyBuilder::run`] to execute
+/// the PTY session.
+///
+/// # Example
+///
+/// ```ignore
+/// let exit_code = session.pty_builder()
+///     .with_raw()
+///     .with_term("xterm-256color")
+///     .run()
+///     .await?;
+/// ```
+pub struct PtyBuilder<'a> {
+    session: &'a mut Session,
+    raw_mode: bool,
+    term: String,
+    width: u32,
+    height: u32,
+    command: Option<String>,
+}
+
+impl<'a> PtyBuilder<'a> {
+    /// Enables raw mode for proper control character handling.
+    ///
+    /// In raw mode, the local terminal does not process control characters,
+    /// allowing them to pass through to the remote SSH session. This enables
+    /// proper handling of arrow keys, Ctrl+C, Tab, and other control sequences.
+    ///
+    /// This is the primary feature needed to make the simple-ssh binary
+    /// behave like the standard ssh client.
+    pub fn with_raw(mut self) -> Self {
+        self.raw_mode = true;
+        self
+    }
+
+    /// Sets the terminal type string sent to the remote server.
+    ///
+    /// # Arguments
+    ///
+    /// * `term` - Terminal type (e.g., "xterm", "xterm-256color", "vt100")
+    pub fn with_term(mut self, term: &str) -> Self {
+        self.term = term.to_string();
+        self
+    }
+
+    /// Sets the terminal dimensions.
+    ///
+    /// # Arguments
+    ///
+    /// * `width` - Number of columns (default: 80)
+    /// * `height` - Number of rows (default: 24)
+    pub fn with_size(mut self, width: u32, height: u32) -> Self {
+        self.width = width.max(1);
+        self.height = height.max(1);
+        self
+    }
+
+    /// Sets a custom command to execute instead of the default shell.
+    ///
+    /// # Arguments
+    ///
+    /// * `cmd` - Command to execute in the PTY
+    pub fn with_command(mut self, cmd: &str) -> Self {
+        self.command = Some(cmd.to_string());
+        self
+    }
+
+    /// Executes the PTY session with the configured options.
+    ///
+    /// This method consumes the builder and runs the interactive session.
+    /// The session runs until the remote command exits or the connection is
+    /// terminated.
+    ///
+    /// # Returns
+    ///
+    /// The exit code of the remote command.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the PTY cannot be established or the session fails.
+    pub async fn run(self) -> Result<u32> {
+        let command = self
+            .command
+            .unwrap_or_else(|| self.session.inner.get_command());
+        let Some(sess) = self.session.inner.get_session() else {
+            return Err(Error::msg("No open session"));
+        };
+
+        pty_with_options(
+            sess,
+            &command,
+            &self.term,
+            self.width,
+            self.height,
+            self.raw_mode,
+        )
+        .await
     }
 }
 
@@ -790,7 +968,7 @@ async fn pty(session: &mut client::Handle<Client>, command: &str) -> Result<u32>
     let mut channel = session.channel_open_session().await?;
 
     // This example doesn't terminal resizing after the connection is established
-    let (w, h) = termion::terminal_size()?;
+    let (w, h) = size()?;
 
     // Request an interactive PTY from the server
     channel
@@ -807,8 +985,8 @@ async fn pty(session: &mut client::Handle<Client>, command: &str) -> Result<u32>
     channel.exec(true, command).await?;
 
     let code;
-    let mut stdin = tokio_fd::AsyncFd::try_from(0)?;
-    let mut stdout = tokio_fd::AsyncFd::try_from(1)?;
+    let mut stdin = tokio::io::stdin();
+    let mut stdout = tokio::io::stdout();
     let mut buf = vec![0; 1024];
     let mut stdin_closed = false;
 
@@ -852,6 +1030,157 @@ async fn pty(session: &mut client::Handle<Client>, command: &str) -> Result<u32>
             },
         }
     }
+    Ok(code)
+}
+
+/// RAII guard for raw terminal mode (cross-platform).
+///
+/// When dropped, automatically restores the terminal to its original mode.
+struct RawGuard;
+
+impl Drop for RawGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+    }
+}
+
+/// Writes terminal reset sequences using crossterm's async API.
+///
+/// This function sends terminal reset sequences that match the crossterm commands
+/// used in terminal_cleanup() for consistency between normal and panic paths.
+async fn write_reset_sequences(stdout: &mut (impl AsyncWrite + Unpin), raw_mode: bool) {
+    if raw_mode {
+        let _ = stdout.write_all(&terminal_reset_bytes()).await;
+        let _ = stdout.flush().await;
+    }
+}
+
+/// Clears any pending input from stdin to prevent it from appearing
+/// in the shell prompt after the PTY session ends.
+fn clear_stdin_buffer() {
+    #[cfg(unix)]
+    {
+        use std::io::Read;
+        let mut buffer = [0u8; 1024];
+        // Set stdin to non-blocking temporarily to drain any pending input
+        unsafe {
+            let flags = libc::fcntl(0, libc::F_GETFL, 0);
+            if flags >= 0 {
+                let setfl_result = libc::fcntl(0, libc::F_SETFL, flags | libc::O_NONBLOCK);
+                if setfl_result >= 0 {
+                    let stdin = std::io::stdin();
+                    let mut stdin_lock = stdin.lock();
+                    while let Ok(n) = stdin_lock.read(&mut buffer) {
+                        if n == 0 {
+                            break;
+                        }
+                    }
+                }
+                let _ = libc::fcntl(0, libc::F_SETFL, flags);
+            }
+        }
+    }
+}
+
+async fn pty_with_options(
+    session: &mut client::Handle<Client>,
+    command: &str,
+    term: &str,
+    width: u32,
+    height: u32,
+    raw_mode: bool,
+) -> Result<u32> {
+    let mut channel = session.channel_open_session().await?;
+
+    channel
+        .request_pty(false, term, width, height, 0, 0, &[])
+        .await?;
+    channel.exec(true, command).await?;
+
+    let mut stdin = tokio::io::stdin();
+    let mut stdout = tokio::io::stdout();
+    let mut buf = vec![0; 1024];
+    let mut stdin_closed = false;
+
+    let _raw_guard = if raw_mode {
+        setup_panic_hook();
+        enable_raw_mode()?;
+        Some(RawGuard)
+    } else {
+        None
+    };
+
+    let code = loop {
+        tokio::select! {
+            r = stdin.read(&mut buf), if !stdin_closed => {
+                match r {
+                    Ok(0) => {
+                        stdin_closed = true;
+                        channel.eof().await?;
+                    },
+                    Ok(n) => channel.data(&buf[..n]).await?,
+                    Err(e) => {
+                        write_reset_sequences(&mut stdout, raw_mode).await;
+                        drop(_raw_guard);
+                        clear_stdin_buffer();
+                        return Err(e.into());
+                    }
+                };
+            },
+            msg = channel.wait() => {
+                match msg {
+                    Some(ChannelMsg::Data { ref data }) => {
+                        stdout.write_all(data).await?;
+                        stdout.flush().await?;
+                    }
+                    Some(ChannelMsg::ExitStatus { exit_status }) => {
+                        if !stdin_closed {
+                            channel.eof().await?;
+                        }
+                        // Drain any remaining data from the channel before exiting
+                        // to ensure terminal cleanup sequences from apps like nano are processed
+                        loop {
+                            tokio::select! {
+                                msg = channel.wait() => {
+                                    match msg {
+                                        Some(ChannelMsg::Data { ref data }) => {
+                                            stdout.write_all(data).await?;
+                                            stdout.flush().await?;
+                                        }
+                                        _ => break,
+                                    }
+                                }
+                                _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {
+                                    break;
+                                }
+                            }
+                        }
+                        break exit_status;
+                    }
+                    None => {
+                        write_reset_sequences(&mut stdout, raw_mode).await;
+                        drop(_raw_guard);
+                        clear_stdin_buffer();
+                        return Err(Error::msg("Channel closed unexpectedly"));
+                    }
+                    _ => {}
+                }
+            },
+        }
+    };
+
+    // Write reset sequences while still in raw mode to ensure they're processed
+    write_reset_sequences(&mut stdout, raw_mode).await;
+
+    // Now safe to disable raw mode
+    drop(_raw_guard);
+
+    // Clear any pending stdin to prevent it from appearing in the shell prompt
+    clear_stdin_buffer();
+
+    // Ensure stdout is flushed before returning to shell
+    stdout.flush().await?;
+
     Ok(code)
 }
 
@@ -2073,4 +2402,222 @@ fn test_scope_variations() {
             assert_eq!(data.scope, Some(scope.to_string()));
         }
     }
+}
+
+#[tokio::test]
+async fn test_pty_builder_no_session() {
+    let mut session = Session::init()
+        .with_host("localhost")
+        .with_user("user")
+        .with_passwd("pass")
+        .build()
+        .unwrap();
+
+    let result = session.pty_builder().run().await;
+    assert!(result.is_err());
+    assert_eq!(result.unwrap_err().to_string(), "No open session");
+}
+
+#[tokio::test]
+async fn test_pty_builder_with_raw_no_session() {
+    let mut session = Session::init()
+        .with_host("localhost")
+        .with_user("user")
+        .with_passwd("pass")
+        .build()
+        .unwrap();
+
+    let result = session.pty_builder().with_raw().run().await;
+    assert!(result.is_err());
+    assert_eq!(result.unwrap_err().to_string(), "No open session");
+}
+
+#[tokio::test]
+async fn test_pty_builder_with_term_no_session() {
+    let mut session = Session::init()
+        .with_host("localhost")
+        .with_user("user")
+        .with_passwd("pass")
+        .build()
+        .unwrap();
+
+    let result = session
+        .pty_builder()
+        .with_term("xterm-256color")
+        .run()
+        .await;
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn test_pty_builder_with_size_no_session() {
+    let mut session = Session::init()
+        .with_host("localhost")
+        .with_user("user")
+        .with_passwd("pass")
+        .build()
+        .unwrap();
+
+    let result = session.pty_builder().with_size(120, 40).run().await;
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn test_pty_builder_with_command_no_session() {
+    let mut session = Session::init()
+        .with_host("localhost")
+        .with_user("user")
+        .with_passwd("pass")
+        .build()
+        .unwrap();
+
+    let result = session.pty_builder().with_command("ls").run().await;
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn test_pty_builder_full_config_no_session() {
+    let mut session = Session::init()
+        .with_host("localhost")
+        .with_user("user")
+        .with_passwd("pass")
+        .build()
+        .unwrap();
+
+    let result = session
+        .pty_builder()
+        .with_raw()
+        .with_term("vt100")
+        .with_size(80, 24)
+        .with_command("/bin/sh")
+        .run()
+        .await;
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_pty_builder_default_values() {
+    let session = Session::init()
+        .with_host("localhost")
+        .with_user("user")
+        .with_passwd("pass")
+        .build()
+        .unwrap();
+
+    let mut session_mut = session;
+    let builder = session_mut.pty_builder();
+
+    assert_eq!(builder.raw_mode, false);
+    assert_eq!(builder.command, None);
+
+    let term = env::var("TERM").ok().unwrap_or_else(|| "xterm".to_string());
+    assert_eq!(builder.term, term);
+
+    let (w, h) = size().unwrap_or((80, 24));
+    assert_eq!(builder.width, w as u32);
+    assert_eq!(builder.height, h as u32);
+}
+
+#[test]
+fn test_pty_builder_with_raw_sets_flag() {
+    let session = Session::init()
+        .with_host("localhost")
+        .with_user("user")
+        .with_passwd("pass")
+        .build()
+        .unwrap();
+
+    let mut session_mut = session;
+    let builder = session_mut.pty_builder().with_raw();
+
+    assert_eq!(builder.raw_mode, true);
+}
+
+#[test]
+fn test_pty_builder_with_term_sets_terminal() {
+    let session = Session::init()
+        .with_host("localhost")
+        .with_user("user")
+        .with_passwd("pass")
+        .build()
+        .unwrap();
+
+    let mut session_mut = session;
+    let builder = session_mut.pty_builder().with_term("xterm-256color");
+
+    assert_eq!(builder.term, "xterm-256color");
+}
+
+#[test]
+fn test_pty_builder_with_size_sets_dimensions() {
+    let session = Session::init()
+        .with_host("localhost")
+        .with_user("user")
+        .with_passwd("pass")
+        .build()
+        .unwrap();
+
+    let mut session_mut = session;
+    let builder = session_mut.pty_builder().with_size(120, 40);
+
+    assert_eq!(builder.width, 120);
+    assert_eq!(builder.height, 40);
+}
+
+#[test]
+fn test_pty_builder_with_command_sets_command() {
+    let session = Session::init()
+        .with_host("localhost")
+        .with_user("user")
+        .with_passwd("pass")
+        .build()
+        .unwrap();
+
+    let mut session_mut = session;
+    let builder = session_mut.pty_builder().with_command("/bin/zsh");
+
+    assert_eq!(builder.command, Some("/bin/zsh".to_string()));
+}
+
+#[test]
+fn test_pty_builder_method_chaining() {
+    let session = Session::init()
+        .with_host("localhost")
+        .with_user("user")
+        .with_passwd("pass")
+        .build()
+        .unwrap();
+
+    let mut session_mut = session;
+    let builder = session_mut
+        .pty_builder()
+        .with_raw()
+        .with_term("vt100")
+        .with_size(100, 30)
+        .with_command("/bin/bash");
+
+    assert_eq!(builder.raw_mode, true);
+    assert_eq!(builder.term, "vt100");
+    assert_eq!(builder.width, 100);
+    assert_eq!(builder.height, 30);
+    assert_eq!(builder.command, Some("/bin/bash".to_string()));
+}
+
+#[tokio::test]
+async fn test_pty_builder_uses_session_command() {
+    let custom_cmd = vec!["zsh".to_string(), "-l".to_string()];
+    let session = Session::init()
+        .with_host("localhost")
+        .with_user("user")
+        .with_cmd(custom_cmd.clone())
+        .with_passwd("pass")
+        .build()
+        .unwrap();
+
+    let mut session_mut = session;
+    let builder = session_mut.pty_builder();
+
+    let expected_cmd: String = builder.session.inner.get_command();
+    assert!(expected_cmd.contains("zsh"));
+    assert!(expected_cmd.contains("-l"));
 }
