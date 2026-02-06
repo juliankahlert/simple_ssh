@@ -29,59 +29,82 @@ use tokio::time::{timeout, Duration};
 
 use simple_ssh::Session;
 
+/// Command line arguments for the simple-scp binary.
 #[derive(Debug, Parser, Clone, PartialEq)]
 #[command(name = "simple-scp")]
 #[command(author = "Julian Kahlert")]
 #[command(version = "0.1.1")]
 #[command(about = "A simple SCP client for file transfer", long_about = None)]
 struct Args {
+    /// SSH host to connect to.
     #[arg(short = 'H', long)]
     #[arg(help = "SSH host to connect to")]
     host: String,
 
+    /// SSH username.
     #[arg(short, long, default_value = "root")]
     #[arg(help = "SSH username")]
     user: String,
 
+    /// SSH password.
     #[arg(short = 'P', long)]
     #[arg(help = "SSH password")]
     passwd: Option<String>,
 
+    /// Path to private key file.
     #[arg(short = 'i', long)]
     #[arg(help = "Path to private key file")]
     key: Option<PathBuf>,
 
+    /// SSH port.
     #[arg(short, long, default_value = "22")]
     #[arg(help = "SSH port")]
     port: u16,
 
+    /// IPv6 scope ID (e.g., interface name or number).
     #[arg(long)]
     #[arg(help = "IPv6 scope ID (e.g., interface name or number)")]
     scope: Option<String>,
 
+    /// Authentication method.
     #[arg(short, long, value_enum)]
     #[arg(help = "Authentication method")]
     auth: Option<AuthMethod>,
 
+    /// Local file to upload.
     #[arg(required = true)]
     #[arg(help = "Local file to upload")]
     local: PathBuf,
 
+    /// Remote destination path.
     #[arg(required = true)]
     #[arg(help = "Remote destination path")]
     remote: String,
 }
 
+/// Authentication methods for SSH connections.
 #[derive(Debug, Clone, ValueEnum, PartialEq)]
 enum AuthMethod {
+    /// Password-based authentication.
     #[value(name = "password")]
     Password,
+    /// Public key authentication.
     #[value(name = "key")]
     Key,
+    /// No authentication (none).
     #[value(name = "none")]
     None,
 }
 
+/// Builds a Session from command line arguments.
+///
+/// # Arguments
+///
+/// * `args` - Parsed command line arguments
+///
+/// # Returns
+///
+/// A configured Session or an error if required arguments are missing.
 fn build_session_from_args(args: &Args) -> Result<Session> {
     let mut session = Session::init()
         .with_host(&args.host)
@@ -120,6 +143,11 @@ fn build_session_from_args(args: &Args) -> Result<Session> {
     session.build()
 }
 
+/// Formats a transfer message for display.
+///
+/// # Arguments
+///
+/// * `args` - Command line arguments
 fn format_transfer_message(args: &Args) -> String {
     let local_path = args.local.to_string_lossy();
     format!(
@@ -128,10 +156,20 @@ fn format_transfer_message(args: &Args) -> String {
     )
 }
 
+/// Gets the local file path as a string.
+///
+/// # Arguments
+///
+/// * `args` - Command line arguments
 fn get_local_path_str(args: &Args) -> String {
     args.local.to_string_lossy().to_string()
 }
 
+/// Gets the remote destination path.
+///
+/// # Arguments
+///
+/// * `args` - Command line arguments
 fn get_remote_path(args: &Args) -> &str {
     &args.remote
 }

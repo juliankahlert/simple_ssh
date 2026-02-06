@@ -29,56 +29,78 @@ use tokio::time::{timeout, Duration};
 
 use simple_ssh::Session;
 
+/// Command line arguments for the simple-ssh binary.
 #[derive(Debug, Parser, Clone, PartialEq)]
 #[command(name = "simple-ssh")]
 #[command(author = "Julian Kahlert")]
 #[command(version = "0.1.1")]
 #[command(about = "A simple SSH client with PTY support", long_about = None)]
 struct Args {
+    /// SSH host to connect to.
     #[arg(short = 'H', long)]
     #[arg(help = "SSH host to connect to")]
     host: String,
 
+    /// SSH username.
     #[arg(short, long, default_value = "root")]
     #[arg(help = "SSH username")]
     user: String,
 
+    /// SSH password.
     #[arg(short = 'P', long)]
     #[arg(help = "SSH password")]
     passwd: Option<String>,
 
+    /// Path to private key file.
     #[arg(short = 'i', long)]
     #[arg(help = "Path to private key file")]
     key: Option<PathBuf>,
 
+    /// SSH port.
     #[arg(short, long, default_value = "22")]
     #[arg(help = "SSH port")]
     port: u16,
 
+    /// IPv6 scope ID (e.g., interface name or number).
     #[arg(long)]
     #[arg(help = "IPv6 scope ID (e.g., interface name or number)")]
     scope: Option<String>,
 
+    /// Authentication method.
     #[arg(short, long, value_enum)]
     #[arg(help = "Authentication method")]
     auth: Option<AuthMethod>,
 
+    /// Command to execute (if not provided, opens interactive shell).
     #[arg(trailing_var_arg = true)]
     #[arg(allow_hyphen_values = true)]
     #[arg(help = "Command to execute (if not provided, opens interactive shell)")]
     command: Vec<String>,
 }
 
+/// Authentication methods for SSH connections.
 #[derive(Debug, Clone, ValueEnum, PartialEq)]
 enum AuthMethod {
+    /// Password-based authentication.
     #[value(name = "password")]
     Password,
+    /// Public key authentication.
     #[value(name = "key")]
     Key,
+    /// No authentication (none).
     #[value(name = "none")]
     None,
 }
 
+/// Builds a Session from command line arguments.
+///
+/// # Arguments
+///
+/// * `args` - Parsed command line arguments
+///
+/// # Returns
+///
+/// A configured Session or an error if required arguments are missing.
 fn build_session_from_args(args: &Args) -> Result<Session> {
     let mut session = Session::init()
         .with_host(&args.host)
@@ -117,10 +139,20 @@ fn build_session_from_args(args: &Args) -> Result<Session> {
     session.build()
 }
 
+/// Joins command arguments into a single string.
+///
+/// # Arguments
+///
+/// * `args` - Command line arguments
 fn command_from_args(args: &Args) -> String {
     args.command.join(" ")
 }
 
+/// Checks if a command was provided.
+///
+/// # Arguments
+///
+/// * `args` - Command line arguments
 fn has_command(args: &Args) -> bool {
     !args.command.is_empty()
 }
@@ -148,12 +180,23 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+/// Runs an interactive shell session with PTY support.
+///
+/// # Arguments
+///
+/// * `ssh` - Connected SSH session
 async fn interactive_shell(ssh: &mut Session) -> Result<u32> {
     let exit_code = ssh.pty().await?;
     println!("\r\nConnection closed with exit code: {}", exit_code);
     Ok(exit_code)
 }
 
+/// Executes a non-interactive command.
+///
+/// # Arguments
+///
+/// * `ssh` - Connected SSH session
+/// * `command` - Command to execute
 async fn non_interactive(ssh: &mut Session, command: &str) -> Result<u32> {
     let exit_code = ssh.cmd(command).await?;
     Ok(exit_code)
