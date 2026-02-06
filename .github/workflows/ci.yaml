@@ -50,18 +50,24 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-target-
 
+      # Install cross for cross-compilation (use stable version)
+      - name: Install cross
+        run: cargo install cross
+
       # Build the project for all musl targets
+      # x86_64 and i686 can use cargo directly
       - name: Build project for musl-amd64
         run: cargo build --release --target x86_64-unknown-linux-musl
 
       - name: Build project for musl-i686
         run: cargo build --release --target i686-unknown-linux-musl
 
+      # ARM targets need cross for proper cross-compilation
       - name: Build project for musl-aarch64
-        run: cargo build --release --target aarch64-unknown-linux-musl
+        run: cross build --release --target aarch64-unknown-linux-musl
 
       - name: Build project for musl-arm
-        run: cargo build --release --target arm-unknown-linux-musleabihf
+        run: cross build --release --target arm-unknown-linux-musleabihf
 
       # Build the project for this machine
       - name: Build project
