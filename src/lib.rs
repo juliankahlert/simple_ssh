@@ -106,7 +106,7 @@ impl<'sb> Session {
     }
 
     pub async fn cmd(&mut self, command: &str) -> Result<u32> {
-        self.inner.cmd(&command, false, false).await
+        self.inner.cmd(command, false, false).await
     }
 
     pub async fn scp(&mut self, from: &str, to: &str) -> Result<()> {
@@ -181,7 +181,7 @@ impl<'sb> SessionBuilder<'sb> {
     }
     pub fn build(self) -> Result<Session> {
         if let Some(key) = self.key {
-            return Ok(Session {
+            Ok(Session {
                 inner: SessionInner::PubKey {
                     session: None,
                     data: SessionDataPubKey {
@@ -195,9 +195,9 @@ impl<'sb> SessionBuilder<'sb> {
                         inactivity_timeout: self.inactivity_timeout,
                     },
                 },
-            });
+            })
         } else if let Some(passwd) = self.passwd {
-            return Ok(Session {
+            Ok(Session {
                 inner: SessionInner::Passwd {
                     session: None,
                     data: SessionDataPasswd {
@@ -210,9 +210,9 @@ impl<'sb> SessionBuilder<'sb> {
                         inactivity_timeout: self.inactivity_timeout,
                     },
                 },
-            });
+            })
         } else {
-            return Ok(Session {
+            Ok(Session {
                 inner: SessionInner::NoAuth {
                     session: None,
                     data: SessionDataNoAuth {
@@ -224,7 +224,7 @@ impl<'sb> SessionBuilder<'sb> {
                         inactivity_timeout: self.inactivity_timeout,
                     },
                 },
-            });
+            })
         }
     }
 }
@@ -296,21 +296,15 @@ impl SessionInner {
             Self::Passwd {
                 data: _,
                 session: _,
-            } => {
-                return self.connect_passwd().await;
-            }
+            } => self.connect_passwd().await,
             Self::PubKey {
                 data: _,
                 session: _,
-            } => {
-                return self.connect_key().await;
-            }
+            } => self.connect_key().await,
             Self::NoAuth {
                 data: _,
                 session: _,
-            } => {
-                return self.connect_noauth().await;
-            }
+            } => self.connect_noauth().await,
         }
     }
 
@@ -356,7 +350,7 @@ impl SessionInner {
 
     async fn cmd(&mut self, command: &str, err: bool, out: bool) -> Result<u32> {
         if let Some(session) = self.get_session() {
-            return system(session, &command, err, out).await;
+            return system(session, command, err, out).await;
         }
 
         Err(Error::msg("No open session"))
@@ -377,7 +371,7 @@ impl SessionInner {
             Self::NoAuth { data, session: _ } => &data.cmdv,
         };
 
-        cmd.into_iter()
+        cmd.iter()
             .map(|x| shell_escape::escape(x.into())) // arguments are escaped manually since the SSH protocol doesn't support quoting
             .collect::<Vec<_>>()
             .join(" ")
@@ -436,7 +430,7 @@ impl SessionInner {
             }
 
             return Ok(Self::Passwd {
-                data: data,
+                data,
                 session: Some(session),
             });
         }
@@ -498,7 +492,7 @@ impl SessionInner {
             }
 
             return Ok(Self::PubKey {
-                data: data,
+                data,
                 session: Some(session),
             });
         }
@@ -630,7 +624,7 @@ async fn wait_for_data(channel: &mut Channel<Msg>) -> Result<Vec<u8>> {
             Some(ChannelMsg::Data { ref data }) => {
                 return Ok(data.to_vec());
             }
-            Some(ChannelMsg::ExtendedData { ref data, ext }) if ext == 1 => {
+            Some(ChannelMsg::ExtendedData { ref data, ext: 1 }) => {
                 return Err(Error::msg(format!(
                     "SCP error: {}",
                     String::from_utf8_lossy(data)
@@ -789,7 +783,7 @@ async fn scp(
             // Handle SSH channel messages (window adjust, errors, etc.)
             msg = state.channel.wait() => {
                 match msg {
-                    Some(ChannelMsg::ExtendedData { data, ext }) if ext == 1 => {
+                    Some(ChannelMsg::ExtendedData { data, ext: 1 }) => {
                         return Err(anyhow!(
                             "Remote SCP error: {}",
                             String::from_utf8_lossy(&data)
@@ -1182,7 +1176,7 @@ async fn test_session_close_no_connection() {
 #[tokio::test]
 async fn test_client_handler_check_server_key() {
     use russh::client::Handler;
-    use ssh_key::{Algorithm, PublicKey as SshPublicKey};
+    use ssh_key::PublicKey as SshPublicKey;
 
     // Create a client handler
     let mut client = Client {};
