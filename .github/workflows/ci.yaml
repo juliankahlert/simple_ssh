@@ -193,7 +193,7 @@ jobs:
             ${{ runner.os }}-cargo-target-native-
 
       - name: Build project
-        run: cargo build
+        run: cargo build --release
 
   test:
     runs-on: ubuntu-latest
