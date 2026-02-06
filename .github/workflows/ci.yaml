@@ -9,31 +9,25 @@ on:
       - main
 
 jobs:
-  build:
+  build-amd64:
     runs-on: ubuntu-latest
-
     steps:
-      # Checkout the code
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      # Set up Rust toolchain using actions-rust-lang/setup-rust-toolchain
       - name: Set up Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: stable
 
-      # Set up cross-compilation to musl target
-      - name: Set up cross-compilation to musl
+      - name: Set up musl target
         run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
           rustup target add x86_64-unknown-linux-musl
-          rustup target add i686-unknown-linux-musl
-          rustup target add aarch64-unknown-linux-musl
-          rustup target add arm-unknown-linux-musleabihf
-          export PATH="$HOME/.cargo/bin:$PATH"
 
       - name: Cache Cargo registry
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
@@ -43,40 +37,203 @@ jobs:
             ${{ runner.os }}-cargo-registry-
 
       - name: Cache Cargo target
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: target
-          key: ${{ runner.os }}-cargo-target-${{ hashFiles('**/Cargo.toml') }}
+          key: ${{ runner.os }}-cargo-target-amd64-${{ hashFiles('**/Cargo.toml') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-target-
+            ${{ runner.os }}-cargo-target-amd64-
 
-      # Install cross for cross-compilation (use stable version)
+      - name: Build project
+        run: cargo build --release --locked --target x86_64-unknown-linux-musl
+
+  build-i686:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
       - name: Install cross
         run: cargo install cross
 
-      # Build the project for all musl targets
-      # x86_64 and i686 can use cargo directly
-      - name: Build project for musl-amd64
-        run: cargo build --release --target x86_64-unknown-linux-musl
+      - name: Set up musl target
+        run: rustup target add i686-unknown-linux-musl
 
-      - name: Build project for musl-i686
-        run: cargo build --release --target i686-unknown-linux-musl
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
 
-      # ARM targets need cross for proper cross-compilation
-      - name: Build project for musl-aarch64
-        run: cross build --release --target aarch64-unknown-linux-musl
+      - name: Cache Cargo target
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-target-i686-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-target-i686-
 
-      - name: Build project for musl-arm
-        run: cross build --release --target arm-unknown-linux-musleabihf
-
-      # Build the project for this machine
       - name: Build project
-        run: cargo build
+        run: cross build --release --locked --target i686-unknown-linux-musl
 
-      # Run tests
+  build-aarch64:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Install cross
+        run: cargo install cross
+
+      - name: Cache Cargo target
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-target-aarch64-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-target-aarch64-
+
+      - name: Build project
+        run: cross build --release --locked --target aarch64-unknown-linux-musl
+
+  build-arm:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Install cross
+        run: cargo install cross
+
+      - name: Set up musl target
+        run: rustup target add arm-unknown-linux-musleabihf
+
+      - name: Cache Cargo target
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-target-arm-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-target-arm-
+
+      - name: Build project
+        run: cross build --release --locked --target arm-unknown-linux-musleabihf
+
+  build-native:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Cache Cargo target
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-target-native-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-target-native-
+
+      - name: Build project
+        run: cargo build --release --locked
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Cache Cargo target
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-target-test-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-target-test-
+
       - name: Run tests
-        run: cargo test
+        run: cargo test --locked
 
-      # Optionally, check formatting using rustfmt
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
       - name: Check formatting
-        run: cargo fmt -- --check
+        run: cargo fmt --check
