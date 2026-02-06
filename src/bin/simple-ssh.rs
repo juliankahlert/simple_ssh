@@ -24,6 +24,8 @@
 
 use anyhow::{anyhow, Result};
 use clap::{Parser, ValueEnum};
+use shell_escape::escape;
+use std::borrow::Cow;
 use std::path::PathBuf;
 use tokio::time::{timeout, Duration};
 
@@ -139,13 +141,20 @@ fn build_session_from_args(args: &Args) -> Result<Session> {
     session.build()
 }
 
-/// Joins command arguments into a single string.
+/// Joins command arguments into a single shell-escaped string.
+///
+/// Each argument is individually shell-escaped to preserve the original
+/// quoting and spacing semantics when executed by a remote shell.
 ///
 /// # Arguments
 ///
 /// * `args` - Command line arguments
 fn command_from_args(args: &Args) -> String {
-    args.command.join(" ")
+    args.command
+        .iter()
+        .map(|s| escape(Cow::Borrowed(s.as_str())).to_string())
+        .collect::<Vec<String>>()
+        .join(" ")
 }
 
 /// Checks if a command was provided.
@@ -442,6 +451,18 @@ mod tests {
     fn test_command_from_args_multiple() {
         let args = Args::parse_from(&["simple-ssh", "-H", "localhost", "echo", "hello", "world"]);
         assert_eq!(command_from_args(&args), "echo hello world");
+    }
+
+    #[test]
+    fn test_command_from_args_with_special_chars() {
+        let args = Args::parse_from(&["simple-ssh", "-H", "localhost", "echo", "hello world"]);
+        assert_eq!(command_from_args(&args), r#"echo 'hello world'"#);
+    }
+
+    #[test]
+    fn test_command_from_args_with_quotes() {
+        let args = Args::parse_from(&["simple-ssh", "-H", "localhost", "echo", "it's a test"]);
+        assert_eq!(command_from_args(&args), r#"echo 'it'\''s a test'"#);
     }
 
     #[test]
