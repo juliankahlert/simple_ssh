@@ -221,6 +221,7 @@ impl<'sb> Session {
             width: width as u32,
             height: height as u32,
             command: None,
+            auto_resize: false,
         }
     }
 
@@ -340,6 +341,7 @@ pub struct PtyBuilder<'a> {
     width: u32,
     height: u32,
     command: Option<String>,
+    auto_resize: bool,
 }
 
 impl<'a> PtyBuilder<'a> {
@@ -388,6 +390,16 @@ impl<'a> PtyBuilder<'a> {
         self
     }
 
+    /// Enables automatic terminal resize handling.
+    ///
+    /// When enabled, the PTY will automatically resize when the local
+    /// terminal window is resized, sending the new dimensions to the
+    /// remote SSH session.
+    pub fn with_auto_resize(mut self) -> Self {
+        self.auto_resize = true;
+        self
+    }
+
     /// Executes the PTY session with the configured options.
     ///
     /// This method consumes the builder and runs the interactive session.
@@ -416,6 +428,7 @@ impl<'a> PtyBuilder<'a> {
             self.width,
             self.height,
             self.raw_mode,
+            self.auto_resize,
         )
         .await
     }
@@ -1089,6 +1102,7 @@ async fn pty_with_options(
     width: u32,
     height: u32,
     raw_mode: bool,
+    auto_resize: bool,
 ) -> Result<u32> {
     let mut channel = session.channel_open_session().await?;
 
@@ -1106,6 +1120,14 @@ async fn pty_with_options(
         setup_panic_hook();
         enable_raw_mode()?;
         Some(RawGuard)
+    } else {
+        None
+    };
+
+    #[cfg(unix)]
+    let mut winch_signal = if auto_resize {
+        let sig = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change())?;
+        Some(sig)
     } else {
         None
     };
@@ -1164,6 +1186,15 @@ async fn pty_with_options(
                         return Err(Error::msg("Channel closed unexpectedly"));
                     }
                     _ => {}
+                }
+            },
+            _ = async {
+                if let Some(ref mut sig) = winch_signal {
+                    sig.recv().await;
+                }
+            }, if auto_resize => {
+                if let Ok((w, h)) = size() {
+                    let _ = channel.window_change(w as u32, h as u32, 0, 0).await;
                 }
             },
         }
@@ -2601,6 +2632,37 @@ fn test_pty_builder_method_chaining() {
     assert_eq!(builder.width, 100);
     assert_eq!(builder.height, 30);
     assert_eq!(builder.command, Some("/bin/bash".to_string()));
+    assert_eq!(builder.auto_resize, false);
+}
+
+#[test]
+fn test_pty_builder_with_auto_resize_sets_flag() {
+    let session = Session::init()
+        .with_host("localhost")
+        .with_user("user")
+        .with_passwd("pass")
+        .build()
+        .unwrap();
+
+    let mut session_mut = session;
+    let builder = session_mut.pty_builder().with_auto_resize();
+
+    assert_eq!(builder.auto_resize, true);
+}
+
+#[test]
+fn test_pty_builder_auto_resize_default_false() {
+    let session = Session::init()
+        .with_host("localhost")
+        .with_user("user")
+        .with_passwd("pass")
+        .build()
+        .unwrap();
+
+    let mut session_mut = session;
+    let builder = session_mut.pty_builder();
+
+    assert_eq!(builder.auto_resize, false);
 }
 
 #[tokio::test]
