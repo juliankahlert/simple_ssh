@@ -58,11 +58,11 @@ jobs:
         with:
           toolchain: stable
 
+      - name: Install cross
+        run: cargo install cross
+
       - name: Set up musl target
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y musl-tools
-          rustup target add i686-unknown-linux-musl
+        run: rustup target add i686-unknown-linux-musl
 
       - name: Cache Cargo registry
         uses: actions/cache@v4
@@ -83,7 +83,7 @@ jobs:
             ${{ runner.os }}-cargo-target-i686-
 
       - name: Build project
-        run: cargo build --release --locked --target i686-unknown-linux-musl
+        run: cross build --release --locked --target i686-unknown-linux-musl
 
   build-aarch64:
     runs-on: ubuntu-latest
