@@ -45,7 +45,7 @@ jobs:
             ${{ runner.os }}-cargo-target-amd64-
 
       - name: Build project
-        run: cargo build --release --target x86_64-unknown-linux-musl
+        run: cargo build --release --locked --target x86_64-unknown-linux-musl
 
   build-i686:
     runs-on: ubuntu-latest
@@ -83,7 +83,7 @@ jobs:
             ${{ runner.os }}-cargo-target-i686-
 
       - name: Build project
-        run: cargo build --release --target i686-unknown-linux-musl
+        run: cargo build --release --locked --target i686-unknown-linux-musl
 
   build-aarch64:
     runs-on: ubuntu-latest
@@ -122,7 +122,7 @@ jobs:
             ${{ runner.os }}-cargo-target-aarch64-
 
       - name: Build project
-        run: cross build --release --target aarch64-unknown-linux-musl
+        run: cross build --release --locked --target aarch64-unknown-linux-musl
 
   build-arm:
     runs-on: ubuntu-latest
@@ -161,7 +161,7 @@ jobs:
             ${{ runner.os }}-cargo-target-arm-
 
       - name: Build project
-        run: cross build --release --target arm-unknown-linux-musleabihf
+        run: cross build --release --locked --target arm-unknown-linux-musleabihf
 
   build-native:
     runs-on: ubuntu-latest
@@ -193,7 +193,7 @@ jobs:
             ${{ runner.os }}-cargo-target-native-
 
       - name: Build project
-        run: cargo build --release
+        run: cargo build --release --locked
 
   test:
     runs-on: ubuntu-latest
@@ -225,7 +225,7 @@ jobs:
             ${{ runner.os }}-cargo-target-test-
 
       - name: Run tests
-        run: cargo test
+        run: cargo test --locked
 
   fmt:
     runs-on: ubuntu-latest
