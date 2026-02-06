@@ -43,6 +43,19 @@ use tokio::time::timeout;
 use log::debug;
 use log::info;
 
+/// Resolves a hostname and port to a socket address.
+///
+/// Supports IPv6 link-local addresses with scope IDs.
+///
+/// # Arguments
+///
+/// * `host` - Hostname or IP address
+/// * `port` - Port number
+/// * `scope` - Optional IPv6 scope ID (interface name)
+///
+/// # Returns
+///
+/// A [`SocketAddr`] or an error if resolution fails.
 fn resolve_socket_addr(host: &str, port: u16, scope: Option<&str>) -> Result<SocketAddr> {
     let host_with_scope = if let Some(scope_id) = scope {
         format!("{}%{}", host, scope_id)
@@ -62,11 +75,35 @@ fn resolve_socket_addr(host: &str, port: u16, scope: Option<&str>) -> Result<Soc
     }
 }
 
+/// An SSH session handle that provides methods for executing commands,
+/// transferring files, and managing interactive shells.
+///
+/// Use [`Session::init`] to create a new session builder.
 pub struct Session {
     inner: SessionInner,
 }
 
 impl<'sb> Session {
+    /// Creates a new session builder with default settings.
+    ///
+    /// Defaults:
+    /// - Host: `localhost`
+    /// - User: `root`
+    /// - Port: `22`
+    /// - Command: `bash`
+    /// - Inactivity timeout: 3000 seconds
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use simple_ssh::Session;
+    ///
+    /// let session = Session::init()
+    ///     .with_host("example.com")
+    ///     .with_user("admin")
+    ///     .with_passwd("secret")
+    ///     .build();
+    /// ```
     pub fn init() -> SessionBuilder<'sb> {
         SessionBuilder {
             cmdv: vec!["bash".to_string()],
@@ -81,6 +118,14 @@ impl<'sb> Session {
         }
     }
 
+    /// Connects to the SSH server using the configured authentication method.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The hostname cannot be resolved
+    /// - The connection fails
+    /// - Authentication fails
     pub async fn connect(self) -> Result<Self> {
         match self.inner.connect().await {
             Ok(res) => Ok(Session { inner: res }),
@@ -88,36 +133,135 @@ impl<'sb> Session {
         }
     }
 
+    /// Opens an interactive PTY (pseudo-terminal) session.
+    ///
+    /// This is useful for interactive shell sessions where you want
+    /// terminal emulation support.
+    ///
+    /// # Returns
+    ///
+    /// The exit code of the shell session.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no connection is established.
     pub async fn pty(&mut self) -> Result<u32> {
         self.inner.pty().await
     }
 
+    /// Runs the configured command with output to stdout and stderr.
+    ///
+    /// Uses the command specified via [`SessionBuilder::with_cmd`].
+    ///
+    /// # Returns
+    ///
+    /// The exit code of the command.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no connection is established.
     pub async fn run(&mut self) -> Result<u32> {
         self.inner.exec(None, true, true).await
     }
 
+    /// Executes a command with the given arguments.
+    ///
+    /// # Arguments
+    ///
+    /// * `command` - A vector of command and its arguments
+    ///
+    /// # Returns
+    ///
+    /// The exit code of the command.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no connection is established.
     pub async fn exec(&mut self, command: &Vec<String>) -> Result<u32> {
         self.inner.exec(Some(command), false, false).await
     }
 
+    /// Executes a shell command via `sh -c`.
+    ///
+    /// # Arguments
+    ///
+    /// * `command` - The shell command to execute
+    ///
+    /// # Returns
+    ///
+    /// The exit code of the command.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no connection is established.
     pub async fn system(&mut self, command: &str) -> Result<u32> {
         let sys_cmd = vec!["sh".to_string(), "-c".to_string(), command.to_string()];
         self.inner.exec(Some(&sys_cmd), false, false).await
     }
 
+    /// Executes a single command string.
+    ///
+    /// # Arguments
+    ///
+    /// * `command` - The command to execute
+    ///
+    /// # Returns
+    ///
+    /// The exit code of the command.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no connection is established.
     pub async fn cmd(&mut self, command: &str) -> Result<u32> {
         self.inner.cmd(command, false, false).await
     }
 
+    /// Transfers a file to the remote host via SCP.
+    ///
+    /// # Arguments
+    ///
+    /// * `from` - Local file path
+    /// * `to` - Remote destination path
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - No connection is established
+    /// - The local file cannot be read
+    /// - The transfer fails
     pub async fn scp(&mut self, from: &str, to: &str) -> Result<()> {
         self.inner.scp(from, to).await
     }
 
+    /// Closes the SSH session gracefully.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the disconnect message fails to send.
     pub async fn close(&mut self) -> Result<()> {
         self.inner.close().await
     }
 }
 
+/// Builder for configuring and creating an SSH [`Session`].
+///
+/// Use [`Session::init`] to create a new builder, then chain
+/// configuration methods, and finally call [`SessionBuilder::build`]
+/// to create the session.
+///
+/// # Example
+///
+/// ```
+/// use simple_ssh::Session;
+///
+/// let session = Session::init()
+///     .with_host("example.com")
+///     .with_user("admin")
+///     .with_port(2222)
+///     .with_passwd("secret")
+///     .build()
+///     .expect("Failed to build session");
+/// ```
 pub struct SessionBuilder<'sb> {
     passwd: Option<String>,
     cert: Option<PathBuf>,
@@ -131,54 +275,145 @@ pub struct SessionBuilder<'sb> {
 }
 
 impl<'sb> SessionBuilder<'sb> {
+    /// Sets the SSH certificate path option.
+    ///
+    /// # Arguments
+    ///
+    /// * `cert` - Optional path to the certificate file
     pub fn with_cert_opt(mut self, cert: Option<PathBuf>) -> Self {
         self.cert = cert;
         self
     }
+
+    /// Sets the SSH private key path option.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - Optional path to the private key file
     pub fn with_key_opt(mut self, key: Option<PathBuf>) -> Self {
         self.key = key;
         self
     }
+
+    /// Sets the SSH certificate path for authentication.
+    ///
+    /// # Arguments
+    ///
+    /// * `cert` - Path to the certificate file
     pub fn with_cert(mut self, cert: PathBuf) -> Self {
         self.cert = Some(cert);
         self
     }
+
+    /// Sets the SSH private key path for authentication.
+    ///
+    /// When a key is provided, public key authentication is used.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - Path to the private key file
     pub fn with_key(mut self, key: PathBuf) -> Self {
         self.key = Some(key);
         self
     }
+
+    /// Sets the SSH port.
+    ///
+    /// # Arguments
+    ///
+    /// * `port` - Port number (default: 22)
     pub fn with_port(mut self, port: u16) -> Self {
         self.port = port;
         self
     }
+
+    /// Sets the target host.
+    ///
+    /// # Arguments
+    ///
+    /// * `host` - Hostname or IP address
     pub fn with_host(mut self, host: &'sb str) -> Self {
         self.host = host;
         self
     }
+
+    /// Sets the username for authentication.
+    ///
+    /// # Arguments
+    ///
+    /// * `user` - Username (default: "root")
     pub fn with_user(mut self, user: &'sb str) -> Self {
         self.user = user;
         self
     }
+
+    /// Sets the command to execute for interactive sessions.
+    ///
+    /// # Arguments
+    ///
+    /// * `cmdv` - Command and its arguments as a vector
     pub fn with_cmd(mut self, cmdv: Vec<String>) -> Self {
         self.cmdv = cmdv;
         self
     }
+
+    /// Sets the password for authentication.
+    ///
+    /// When a password is provided (and no key), password authentication is used.
+    ///
+    /// # Arguments
+    ///
+    /// * `passwd` - Password string
     pub fn with_passwd(mut self, passwd: &str) -> Self {
         self.passwd = Some(passwd.to_string());
         self
     }
+
+    /// Sets the password option for authentication.
+    ///
+    /// # Arguments
+    ///
+    /// * `passwd` - Optional password string
     pub fn with_passwd_opt(mut self, passwd: Option<String>) -> Self {
         self.passwd = passwd;
         self
     }
+
+    /// Sets the IPv6 scope ID (interface name or number).
+    ///
+    /// Required for link-local IPv6 addresses.
+    ///
+    /// # Arguments
+    ///
+    /// * `scope` - Interface name (e.g., "eth0") or numeric scope ID
     pub fn with_scope(mut self, scope: &str) -> Self {
         self.scope = Some(scope.to_string());
         self
     }
+
+    /// Sets the inactivity timeout for the SSH connection.
+    ///
+    /// Set to `None` to disable the timeout.
+    ///
+    /// # Arguments
+    ///
+    /// * `timeout` - Optional duration for inactivity timeout
     pub fn with_inactivity_timeout(mut self, timeout: Option<Duration>) -> Self {
         self.inactivity_timeout = timeout;
         self
     }
+
+    /// Builds the [`Session`] with the configured settings.
+    ///
+    /// # Returns
+    ///
+    /// A [`Result`] containing the configured [`Session`] or an error.
+    ///
+    /// # Authentication Priority
+    ///
+    /// 1. If a key is provided, use public key authentication
+    /// 2. If a password is provided, use password authentication
+    /// 3. Otherwise, use no authentication (none)
     pub fn build(self) -> Result<Session> {
         if let Some(key) = self.key {
             Ok(Session {
@@ -229,6 +464,9 @@ impl<'sb> SessionBuilder<'sb> {
     }
 }
 
+/// Internal SSH client handler that implements the russh client trait.
+///
+/// Currently accepts all server keys without verification.
 struct Client;
 
 impl client::Handler for Client {
@@ -242,50 +480,86 @@ impl client::Handler for Client {
     }
 }
 
+/// Session data for password authentication.
 #[derive(Clone)]
 struct SessionDataPasswd {
+    /// Command vector for interactive sessions.
     cmdv: Vec<String>,
+    /// Password for authentication.
     passwd: String,
+    /// Username for authentication.
     user: String,
+    /// Target host.
     host: String,
+    /// Target port.
     port: u16,
+    /// IPv6 scope ID.
     scope: Option<String>,
+    /// Inactivity timeout duration.
     inactivity_timeout: Option<Duration>,
 }
 
+/// Session data for public key authentication.
 #[derive(Clone)]
 struct SessionDataPubKey {
+    /// Optional certificate path.
     cert: Option<PathBuf>,
+    /// Command vector for interactive sessions.
     cmdv: Vec<String>,
+    /// Username for authentication.
     user: String,
+    /// Target host.
     host: String,
+    /// Private key path.
     key: PathBuf,
+    /// Target port.
     port: u16,
+    /// IPv6 scope ID.
     scope: Option<String>,
+    /// Inactivity timeout duration.
     inactivity_timeout: Option<Duration>,
 }
 
+/// Session data for no authentication (none auth).
 #[derive(Clone)]
 struct SessionDataNoAuth {
+    /// Command vector for interactive sessions.
     cmdv: Vec<String>,
+    /// Username for authentication.
     user: String,
+    /// Target host.
     host: String,
+    /// Target port.
     port: u16,
+    /// IPv6 scope ID.
     scope: Option<String>,
+    /// Inactivity timeout duration.
     inactivity_timeout: Option<Duration>,
 }
 
+/// Internal representation of an SSH session.
+///
+/// Tracks the authentication method and connection state.
 enum SessionInner {
+    /// Password authentication variant.
     Passwd {
+        /// Session configuration data.
         data: SessionDataPasswd,
+        /// Active SSH session handle.
         session: Option<client::Handle<Client>>,
     },
+    /// Public key authentication variant.
     PubKey {
+        /// Session configuration data.
         data: SessionDataPubKey,
+        /// Active SSH session handle.
         session: Option<client::Handle<Client>>,
     },
+    /// No authentication variant.
     NoAuth {
+        /// Session configuration data.
         data: SessionDataNoAuth,
+        /// Active SSH session handle.
         session: Option<client::Handle<Client>>,
     },
 }
@@ -502,6 +776,16 @@ impl SessionInner {
 
 /******************************************** Helper ********************************************/
 
+/// Opens a PTY session and runs an interactive shell.
+///
+/// # Arguments
+///
+/// * `session` - The SSH session handle
+/// * `command` - The command to execute in the PTY
+///
+/// # Returns
+///
+/// The exit code of the shell session.
 async fn pty(session: &mut client::Handle<Client>, command: &str) -> Result<u32> {
     let mut channel = session.channel_open_session().await?;
 
@@ -571,6 +855,11 @@ async fn pty(session: &mut client::Handle<Client>, command: &str) -> Result<u32>
     Ok(code)
 }
 
+/// Gracefully closes an SSH session.
+///
+/// # Arguments
+///
+/// * `session` - The SSH session handle
 async fn close_session(session: &mut client::Handle<Client>) -> Result<()> {
     session
         .disconnect(Disconnect::ByApplication, "", "English")
@@ -578,6 +867,18 @@ async fn close_session(session: &mut client::Handle<Client>) -> Result<()> {
     Ok(())
 }
 
+/// Executes a command on the remote system.
+///
+/// # Arguments
+///
+/// * `session` - The SSH session handle
+/// * `command` - The command to execute
+/// * `err` - Whether to output stderr
+/// * `out` - Whether to output stdout
+///
+/// # Returns
+///
+/// The exit code of the command.
 async fn system(
     session: &mut client::Handle<Client>,
     command: &str,
@@ -618,6 +919,15 @@ async fn system(
     code.ok_or(Error::msg("program did not exit cleanly"))
 }
 
+/// Waits for data from an SSH channel.
+///
+/// # Arguments
+///
+/// * `channel` - The SSH channel
+///
+/// # Returns
+///
+/// The received data as a byte vector.
 async fn wait_for_data(channel: &mut Channel<Msg>) -> Result<Vec<u8>> {
     loop {
         match channel.wait().await {
@@ -647,11 +957,17 @@ async fn wait_for_data(channel: &mut Channel<Msg>) -> Result<Vec<u8>> {
     }
 }
 
+/// Initial state for SCP file transfer.
 struct SCPStateOpen {
     channel: Channel<Msg>,
 }
 
 impl SCPStateOpen {
+    /// Initiates a file transfer to the remote path.
+    ///
+    /// # Arguments
+    ///
+    /// * `remote_path` - The destination path on the remote host
     async fn start_tx(mut self, remote_path: &str) -> Result<SCPStateTxStart> {
         let command = format!("scp -t {}", remote_path);
         self.channel.exec(true, command).await?;
@@ -668,6 +984,11 @@ impl SCPStateOpen {
     }
 }
 
+/// Opens a new channel for SCP file transfer.
+///
+/// # Arguments
+///
+/// * `session` - The SSH session handle
 async fn scp_channel_open(session: &mut client::Handle<Client>) -> Result<SCPStateOpen> {
     let res = session.channel_open_session().await;
 
@@ -677,11 +998,18 @@ async fn scp_channel_open(session: &mut client::Handle<Client>) -> Result<SCPSta
     }
 }
 
+/// State for sending file metadata during SCP transfer.
 struct SCPStateTxStart {
     channel: Channel<Msg>,
 }
 
 impl SCPStateTxStart {
+    /// Writes file metadata to initiate the transfer.
+    ///
+    /// # Arguments
+    ///
+    /// * `file_size` - Size of the file in bytes
+    /// * `file_name` - Name of the file
     async fn write_metadata(mut self, file_size: u64, file_name: &str) -> Result<SCPStateTxData> {
         let metadata_msg = format!("C0644 {} {}\n", file_size, file_name);
         self.channel.data(metadata_msg.as_bytes()).await?;
@@ -697,16 +1025,23 @@ impl SCPStateTxStart {
     }
 }
 
+/// State for sending file data during SCP transfer.
 struct SCPStateTxData {
     channel: Channel<Msg>,
 }
 
 impl SCPStateTxData {
+    /// Writes a chunk of file data.
+    ///
+    /// # Arguments
+    ///
+    /// * `buf` - Buffer containing file data
     async fn write_data(&mut self, buf: &[u8]) -> Result<()> {
         self.channel.data(buf).await?;
         Ok(())
     }
 
+    /// Signals end of file and completes the transfer.
     async fn eof(mut self) -> Result<SCPStateEOF> {
         self.channel.data(&b"\0"[..]).await?;
         let data = wait_for_data(&mut self.channel).await?;
@@ -724,17 +1059,26 @@ impl SCPStateTxData {
     }
 }
 
+/// Final state for SCP file transfer.
 struct SCPStateEOF {
     channel: Channel<Msg>,
 }
 
 impl SCPStateEOF {
+    /// Closes the SCP channel.
     async fn close(self) -> Result<()> {
         self.channel.close().await?;
         Ok(())
     }
 }
 
+/// Transfers a file to the remote host using SCP protocol.
+///
+/// # Arguments
+///
+/// * `session` - The SSH session handle
+/// * `local_path` - Path to the local file
+/// * `remote_path` - Destination path on the remote host
 async fn scp(
     session: &mut client::Handle<Client>,
     local_path: &str,
