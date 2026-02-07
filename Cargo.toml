@@ -14,13 +14,14 @@ path = "src/bin/simple-scp.rs"
 [profile.release]
 lto = true
 strip = true
-opt-level = "z"
+opt-level = "s"
 
 [profile.musl]
 inherits = "release"
-lto = true
+lto = "thin"
 strip = true
-opt-level = "z"
+opt-level = "s"
+panic = "abort"
 
 [dependencies]
 russh = "0.51.1"
