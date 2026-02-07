@@ -91,19 +91,19 @@ RUN mkdir -p $CARGO_HOME && \
     cat > $CARGO_HOME/config.toml << 'EOF'
 [target.x86_64-unknown-linux-musl]
 linker = "x86_64-linux-musl-gcc"
-rustflags = ["-C", "link-arg=-static"]
+rustflags = ["-C", "target-feature=+crt-static", "-C", "relocation-model=static", "-C", "link-arg=-static"]
 
 [target.i686-unknown-linux-musl]
 linker = "i686-linux-musl-gcc"
-rustflags = ["-C", "link-arg=-static"]
+rustflags = ["-C", "target-feature=+crt-static", "-C", "relocation-model=static", "-C", "link-arg=-static"]
 
 [target.aarch64-unknown-linux-musl]
 linker = "aarch64-linux-musl-gcc"
-rustflags = ["-C", "link-arg=-static"]
+rustflags = ["-C", "target-feature=+crt-static", "-C", "relocation-model=static", "-C", "link-arg=-static"]
 
 [target.arm-unknown-linux-musleabihf]
 linker = "arm-linux-musleabihf-gcc"
-rustflags = ["-C", "link-arg=-static"]
+rustflags = ["-C", "target-feature=+crt-static", "-C", "relocation-model=static", "-C", "link-arg=-static"]
 EOF
 
 # Install cargo-audit for security checks (version 0.22.1 pinned for reproducibility)
