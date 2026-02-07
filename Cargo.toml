@@ -3,14 +3,6 @@ name = "simple_ssh"
 version = "0.1.2"
 edition = "2021"
 
-[[bin]]
-name = "simple-ssh"
-path = "src/bin/simple-ssh.rs"
-
-[[bin]]
-name = "simple-scp"
-path = "src/bin/simple-scp.rs"
-
 [profile.release]
 lto = true
 strip = true
@@ -32,7 +24,17 @@ log = "0.4.27"
 env_logger = { version = "0.6", default-features = false }
 shell-escape = "0.1"
 crossterm = "0.29.0"
+
+[dev-dependencies]
 clap = { version = "4.4", features = ["derive"] }
+
+[[example]]
+name = "simple-ssh"
+path = "examples/simple-ssh.rs"
+
+[[example]]
+name = "simple-scp"
+path = "examples/simple-scp.rs"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
