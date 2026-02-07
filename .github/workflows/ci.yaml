@@ -48,7 +48,14 @@ jobs:
             ${{ runner.os }}-cargo-target-amd64-
 
       - name: Build project
-        run: cargo build --release --locked --target x86_64-unknown-linux-musl
+        run: cargo build --release --locked --examples --target x86_64-unknown-linux-musl
+
+      - name: Upload amd64 binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: amd64-binaries
+          path: target/x86_64-unknown-linux-musl/release/examples/
+          retention-days: 7
 
   build-i686:
     runs-on: ubuntu-latest
@@ -86,7 +93,14 @@ jobs:
             ${{ runner.os }}-cargo-target-i686-
 
       - name: Build project
-        run: cross build --release --locked --target i686-unknown-linux-musl
+        run: cross build --release --locked --examples --target i686-unknown-linux-musl
+
+      - name: Upload i686 binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: i686-binaries
+          path: target/i686-unknown-linux-musl/release/examples/
+          retention-days: 7
 
   build-aarch64:
     runs-on: ubuntu-latest
@@ -122,7 +136,14 @@ jobs:
             ${{ runner.os }}-cargo-target-aarch64-
 
       - name: Build project
-        run: cross build --release --locked --target aarch64-unknown-linux-musl
+        run: cross build --release --locked --examples --target aarch64-unknown-linux-musl
+
+      - name: Upload aarch64 binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: aarch64-binaries
+          path: target/aarch64-unknown-linux-musl/release/examples/
+          retention-days: 7
 
   build-arm:
     runs-on: ubuntu-latest
@@ -161,7 +182,14 @@ jobs:
             ${{ runner.os }}-cargo-target-arm-
 
       - name: Build project
-        run: cross build --release --locked --target arm-unknown-linux-musleabihf
+        run: cross build --release --locked --examples --target arm-unknown-linux-musleabihf
+
+      - name: Upload arm binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: arm-binaries
+          path: target/arm-unknown-linux-musleabihf/release/examples/
+          retention-days: 7
 
   build-native:
     runs-on: ubuntu-latest
