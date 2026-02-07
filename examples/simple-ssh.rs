@@ -24,17 +24,19 @@
 
 use anyhow::{anyhow, Result};
 use clap::{Parser, ValueEnum};
+use shell_escape::escape;
+use std::borrow::Cow;
 use std::path::PathBuf;
 use tokio::time::{timeout, Duration};
 
 use simple_ssh::Session;
 
-/// Command line arguments for the simple-scp binary.
+/// Command line arguments for the simple-ssh binary.
 #[derive(Debug, Parser, Clone, PartialEq)]
-#[command(name = "simple-scp")]
+#[command(name = "simple-ssh")]
 #[command(author = "Julian Kahlert")]
-#[command(version = "0.1.1")]
-#[command(about = "A simple SCP client for file transfer", long_about = None)]
+#[command(version = env!("CARGO_PKG_VERSION"))]
+#[command(about = "A simple SSH client with PTY support", long_about = None)]
 struct Args {
     /// SSH host to connect to.
     #[arg(short = 'H', long)]
@@ -71,15 +73,11 @@ struct Args {
     #[arg(help = "Authentication method")]
     auth: Option<AuthMethod>,
 
-    /// Local file to upload.
-    #[arg(required = true)]
-    #[arg(help = "Local file to upload")]
-    local: PathBuf,
-
-    /// Remote destination path.
-    #[arg(required = true)]
-    #[arg(help = "Remote destination path")]
-    remote: String,
+    /// Command to execute (if not provided, opens interactive shell).
+    #[arg(trailing_var_arg = true)]
+    #[arg(allow_hyphen_values = true)]
+    #[arg(help = "Command to execute (if not provided, opens interactive shell)")]
+    command: Vec<String>,
 }
 
 /// Authentication methods for SSH connections.
@@ -143,35 +141,29 @@ fn build_session_from_args(args: &Args) -> Result<Session> {
     session.build()
 }
 
-/// Formats a transfer message for display.
+/// Joins command arguments into a single shell-escaped string.
+///
+/// Each argument is individually shell-escaped to preserve the original
+/// quoting and spacing semantics when executed by a remote shell.
 ///
 /// # Arguments
 ///
 /// * `args` - Command line arguments
-fn format_transfer_message(args: &Args) -> String {
-    let local_path = args.local.to_string_lossy();
-    format!(
-        "Transferring '{}' to '{}@{}:{}'",
-        local_path, args.user, args.host, args.remote
-    )
+fn command_from_args(args: &Args) -> String {
+    args.command
+        .iter()
+        .map(|s| escape(Cow::Borrowed(s.as_str())).to_string())
+        .collect::<Vec<String>>()
+        .join(" ")
 }
 
-/// Gets the local file path as a string.
+/// Checks if a command was provided.
 ///
 /// # Arguments
 ///
 /// * `args` - Command line arguments
-fn get_local_path_str(args: &Args) -> String {
-    args.local.to_string_lossy().to_string()
-}
-
-/// Gets the remote destination path.
-///
-/// # Arguments
-///
-/// * `args` - Command line arguments
-fn get_remote_path(args: &Args) -> &str {
-    &args.remote
+fn has_command(args: &Args) -> bool {
+    !args.command.is_empty()
 }
 
 #[tokio::main]
@@ -187,27 +179,41 @@ async fn main() -> Result<()> {
         Err(_) => return Err(anyhow!("Connection timed out")),
     };
 
-    println!("{}", format_transfer_message(&args));
-
-    match timeout(
-        Duration::from_secs(3000),
-        ssh.scp(&get_local_path_str(&args), get_remote_path(&args)),
-    )
-    .await
-    {
-        Ok(Ok(())) => {
-            println!("File transferred successfully.");
-        }
-        Ok(Err(e)) => {
-            return Err(anyhow!("SCP transfer failed: {}", e));
-        }
-        Err(_) => {
-            return Err(anyhow!("SCP transfer timed out"));
-        }
+    if has_command(&args) {
+        non_interactive(&mut ssh, &command_from_args(&args)).await?;
+    } else {
+        interactive_shell(&mut ssh).await?;
     }
 
     ssh.close().await?;
     Ok(())
+}
+
+/// Runs an interactive shell session with PTY support.
+///
+/// # Arguments
+///
+/// * `ssh` - Connected SSH session
+async fn interactive_shell(ssh: &mut Session) -> Result<u32> {
+    let exit_code = ssh
+        .pty_builder()
+        .with_raw()
+        .with_auto_resize()
+        .run()
+        .await?;
+    println!("\r\nConnection closed with exit code: {}", exit_code);
+    Ok(exit_code)
+}
+
+/// Executes a non-interactive command.
+///
+/// # Arguments
+///
+/// * `ssh` - Connected SSH session
+/// * `command` - Command to execute
+async fn non_interactive(ssh: &mut Session, command: &str) -> Result<u32> {
+    let exit_code = ssh.cmd(command).await?;
+    Ok(exit_code)
 }
 
 #[cfg(test)]
@@ -217,24 +223,16 @@ mod tests {
 
     #[test]
     fn test_args_parsing_basic() {
-        let args = Args::parse_from(&[
-            "simple-scp",
-            "-H",
-            "localhost",
-            "/local/file.txt",
-            "/remote/path.txt",
-        ]);
+        let args = Args::parse_from(&["simple-ssh", "-H", "localhost"]);
         assert_eq!(args.host, "localhost");
         assert_eq!(args.user, "root");
         assert_eq!(args.port, 22);
-        assert_eq!(args.local, PathBuf::from("/local/file.txt"));
-        assert_eq!(args.remote, "/remote/path.txt");
     }
 
     #[test]
     fn test_args_parsing_with_options() {
         let args = Args::parse_from(&[
-            "simple-scp",
+            "simple-ssh",
             "-H",
             "192.168.1.1",
             "-u",
@@ -243,84 +241,49 @@ mod tests {
             "2222",
             "-P",
             "secret",
-            "/local/file.txt",
-            "/remote/path.txt",
         ]);
         assert_eq!(args.host, "192.168.1.1");
         assert_eq!(args.user, "admin");
         assert_eq!(args.port, 2222);
         assert_eq!(args.passwd, Some("secret".to_string()));
-        assert_eq!(args.local, PathBuf::from("/local/file.txt"));
-        assert_eq!(args.remote, "/remote/path.txt");
     }
 
     #[test]
-    fn test_args_parsing_with_key() {
+    fn test_args_parsing_with_command() {
         let args = Args::parse_from(&[
-            "simple-scp",
+            "simple-ssh",
             "-H",
             "server.example.com",
-            "-i",
-            "/path/to/key",
-            "/local/file.txt",
-            "/remote/path.txt",
+            "-u",
+            "user",
+            "echo",
+            "hello",
+            "world",
         ]);
-        assert_eq!(args.key, Some(PathBuf::from("/path/to/key")));
-        assert_eq!(args.local, PathBuf::from("/local/file.txt"));
-        assert_eq!(args.remote, "/remote/path.txt");
+        assert_eq!(args.command, vec!["echo", "hello", "world"]);
     }
 
     #[test]
     fn test_args_parsing_with_scope() {
-        let args = Args::parse_from(&[
-            "simple-scp",
-            "-H",
-            "fe80::1",
-            "--scope",
-            "eth0",
-            "/local/file.txt",
-            "/remote/path.txt",
-        ]);
+        let args = Args::parse_from(&["simple-ssh", "-H", "fe80::1", "--scope", "eth0"]);
         assert_eq!(args.scope, Some("eth0".to_string()));
-        assert_eq!(args.local, PathBuf::from("/local/file.txt"));
-        assert_eq!(args.remote, "/remote/path.txt");
     }
 
     #[test]
     fn test_args_parsing_auth_method() {
-        let args = Args::parse_from(&[
-            "simple-scp",
-            "-H",
-            "server.example.com",
-            "--auth",
-            "key",
-            "/local/file.txt",
-            "/remote/path.txt",
-        ]);
+        let args = Args::parse_from(&["simple-ssh", "-H", "server.example.com", "--auth", "key"]);
         assert_eq!(args.auth, Some(AuthMethod::Key));
     }
 
     #[test]
     fn test_args_parsing_default_user() {
-        let args = Args::parse_from(&[
-            "simple-scp",
-            "-H",
-            "localhost",
-            "/local/file.txt",
-            "/remote/path.txt",
-        ]);
+        let args = Args::parse_from(&["simple-ssh", "-H", "localhost"]);
         assert_eq!(args.user, "root");
     }
 
     #[test]
     fn test_args_parsing_default_port() {
-        let args = Args::parse_from(&[
-            "simple-scp",
-            "-H",
-            "localhost",
-            "/local/file.txt",
-            "/remote/path.txt",
-        ]);
+        let args = Args::parse_from(&["simple-ssh", "-H", "localhost"]);
         assert_eq!(args.port, 22);
     }
 
@@ -339,6 +302,15 @@ mod tests {
     }
 
     #[test]
+    fn test_command_join() {
+        let cmd = vec!["echo", "hello", "world"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<String>>();
+        assert_eq!(cmd.join(" "), "echo hello world");
+    }
+
+    #[test]
     fn test_auth_method_enum() {
         assert_eq!(AuthMethod::Password, AuthMethod::Password);
         assert_eq!(AuthMethod::Key, AuthMethod::Key);
@@ -346,39 +318,21 @@ mod tests {
     }
 
     #[test]
-    fn test_pathbuf_from_string() {
-        let path = PathBuf::from("/local/file.txt");
-        assert_eq!(path.to_string_lossy(), "/local/file.txt");
+    fn test_hyphen_command_value() {
+        let args = Args::parse_from(&["simple-ssh", "-H", "localhost", "--", "-c", "echo hello"]);
+        assert_eq!(args.command, vec!["-c", "echo hello"]);
     }
 
     #[test]
-    fn test_pathbuf_display() {
-        let args = Args::parse_from(&[
-            "simple-scp",
-            "-H",
-            "localhost",
-            "/local/dir/file.txt",
-            "/remote/path.txt",
-        ]);
-        assert_eq!(args.local.to_string_lossy(), "/local/dir/file.txt");
-    }
-
-    #[test]
-    fn test_args_parsing_remote_path_with_spaces() {
-        let args = Args::parse_from(&[
-            "simple-scp",
-            "-H",
-            "localhost",
-            "/local/file.txt",
-            "/remote/path/with spaces/file.txt",
-        ]);
-        assert_eq!(args.remote, "/remote/path/with spaces/file.txt");
+    fn test_empty_command_vec() {
+        let args = Args::parse_from(&["simple-ssh", "-H", "localhost"]);
+        assert!(args.command.is_empty());
     }
 
     #[test]
     fn test_build_session_from_args_password() {
         let args = Args::parse_from(&[
-            "simple-scp",
+            "simple-ssh",
             "-H",
             "testhost",
             "-u",
@@ -387,8 +341,6 @@ mod tests {
             "2222",
             "-P",
             "password",
-            "/local.txt",
-            "/remote.txt",
         ]);
         let session = build_session_from_args(&args);
         assert!(session.is_ok());
@@ -397,15 +349,13 @@ mod tests {
     #[test]
     fn test_build_session_from_args_key() {
         let args = Args::parse_from(&[
-            "simple-scp",
+            "simple-ssh",
             "-H",
             "testhost",
             "-u",
             "testuser",
-            "-i",
+            "-k",
             "/path/to/key",
-            "/local.txt",
-            "/remote.txt",
         ]);
         let session = build_session_from_args(&args);
         assert!(session.is_ok());
@@ -414,31 +364,65 @@ mod tests {
     #[test]
     fn test_build_session_from_args_with_scope() {
         let args = Args::parse_from(&[
-            "simple-scp",
+            "simple-ssh",
             "-H",
             "fe80::1",
             "--scope",
             "eth0",
             "-P",
             "pass",
-            "/local.txt",
-            "/remote.txt",
         ]);
         let session = build_session_from_args(&args);
         assert!(session.is_ok());
     }
 
     #[test]
-    fn test_build_session_error_missing_password() {
+    fn test_build_session_from_args_no_auth() {
+        let args = Args::parse_from(&["simple-ssh", "-H", "testhost", "-u", "testuser"]);
+        let session = build_session_from_args(&args);
+        assert!(session.is_ok());
+    }
+
+    #[test]
+    fn test_build_session_auth_password_explicit() {
         let args = Args::parse_from(&[
-            "simple-scp",
+            "simple-ssh",
             "-H",
             "testhost",
             "--auth",
             "password",
-            "/local.txt",
-            "/remote.txt",
+            "-P",
+            "mypass",
         ]);
+        let session = build_session_from_args(&args);
+        assert!(session.is_ok());
+    }
+
+    #[test]
+    fn test_build_session_auth_key_explicit() {
+        let args = Args::parse_from(&[
+            "simple-ssh",
+            "-H",
+            "testhost",
+            "--auth",
+            "key",
+            "-i",
+            "/path/to/key",
+        ]);
+        let session = build_session_from_args(&args);
+        assert!(session.is_ok());
+    }
+
+    #[test]
+    fn test_build_session_auth_none_explicit() {
+        let args = Args::parse_from(&["simple-ssh", "-H", "testhost", "--auth", "none"]);
+        let session = build_session_from_args(&args);
+        assert!(session.is_ok());
+    }
+
+    #[test]
+    fn test_build_session_error_missing_password() {
+        let args = Args::parse_from(&["simple-ssh", "-H", "testhost", "--auth", "password"]);
         let session = build_session_from_args(&args);
         assert!(session.is_err());
         if let Err(e) = session {
@@ -448,15 +432,7 @@ mod tests {
 
     #[test]
     fn test_build_session_error_missing_key() {
-        let args = Args::parse_from(&[
-            "simple-scp",
-            "-H",
-            "testhost",
-            "--auth",
-            "key",
-            "/local.txt",
-            "/remote.txt",
-        ]);
+        let args = Args::parse_from(&["simple-ssh", "-H", "testhost", "--auth", "key"]);
         let session = build_session_from_args(&args);
         assert!(session.is_err());
         if let Err(e) = session {
@@ -465,45 +441,44 @@ mod tests {
     }
 
     #[test]
-    fn test_format_transfer_message() {
-        let args = Args::parse_from(&[
-            "simple-scp",
-            "-H",
-            "example.com",
-            "-u",
-            "user",
-            "/home/user/file.txt",
-            "/remote/dest/file.txt",
-        ]);
-        let msg = format_transfer_message(&args);
-        assert!(msg.contains("/home/user/file.txt"));
-        assert!(msg.contains("user@example.com"));
-        assert!(msg.contains("/remote/dest/file.txt"));
+    fn test_command_from_args_empty() {
+        let args = Args::parse_from(&["simple-ssh", "-H", "localhost"]);
+        assert_eq!(command_from_args(&args), "");
     }
 
     #[test]
-    fn test_get_local_path_str() {
-        let args = Args::parse_from(&[
-            "simple-scp",
-            "-H",
-            "localhost",
-            "/local/path/file.txt",
-            "/remote.txt",
-        ]);
-        let path = get_local_path_str(&args);
-        assert_eq!(path, "/local/path/file.txt");
+    fn test_command_from_args_single() {
+        let args = Args::parse_from(&["simple-ssh", "-H", "localhost", "ls"]);
+        assert_eq!(command_from_args(&args), "ls");
     }
 
     #[test]
-    fn test_get_remote_path() {
-        let args = Args::parse_from(&[
-            "simple-scp",
-            "-H",
-            "localhost",
-            "/local.txt",
-            "/remote/path/file.txt",
-        ]);
-        let path = get_remote_path(&args);
-        assert_eq!(path, "/remote/path/file.txt");
+    fn test_command_from_args_multiple() {
+        let args = Args::parse_from(&["simple-ssh", "-H", "localhost", "echo", "hello", "world"]);
+        assert_eq!(command_from_args(&args), "echo hello world");
+    }
+
+    #[test]
+    fn test_command_from_args_with_special_chars() {
+        let args = Args::parse_from(&["simple-ssh", "-H", "localhost", "echo", "hello world"]);
+        assert_eq!(command_from_args(&args), r#"echo 'hello world'"#);
+    }
+
+    #[test]
+    fn test_command_from_args_with_quotes() {
+        let args = Args::parse_from(&["simple-ssh", "-H", "localhost", "echo", "it's a test"]);
+        assert_eq!(command_from_args(&args), r#"echo 'it'\''s a test'"#);
+    }
+
+    #[test]
+    fn test_has_command_true() {
+        let args = Args::parse_from(&["simple-ssh", "-H", "localhost", "ls"]);
+        assert!(has_command(&args));
+    }
+
+    #[test]
+    fn test_has_command_false() {
+        let args = Args::parse_from(&["simple-ssh", "-H", "localhost"]);
+        assert!(!has_command(&args));
     }
 }
