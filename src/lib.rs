@@ -45,9 +45,14 @@ use russh::keys::*;
 use russh::*;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::sync::{mpsc, watch};
+use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
 use crate::client::Msg;
+
+pub use russh::Pty;
+pub use russh::Sig;
 
 static PANIC_HOOK_SET: std::sync::Once = std::sync::Once::new();
 static PREV_PANIC_HOOK: std::sync::Mutex<
@@ -91,6 +96,269 @@ fn terminal_reset_bytes() -> Vec<u8> {
     bytes.extend_from_slice(&command_to_bytes(ResetColor));
     bytes.extend_from_slice(b"\r\n");
     bytes
+}
+
+/// Represents the exit status of a PTY session.
+///
+/// Captures exit codes, signal termination, or unexpected channel closure.
+#[derive(Debug, Clone)]
+pub enum PtyExitStatus {
+    /// The remote process exited with a numeric exit code.
+    Code(u32),
+    /// The remote process was terminated by a signal.
+    Signal {
+        /// The signal that terminated the process.
+        signal_name: Sig,
+        /// Whether a core dump was produced.
+        core_dumped: bool,
+        /// Error message from the remote side.
+        error_message: String,
+    },
+    /// The SSH channel was closed without an explicit exit status.
+    ChannelClosed,
+}
+
+impl PtyExitStatus {
+    /// Returns the exit code if this is a `Code` variant.
+    ///
+    /// Returns `None` for `Signal` and `ChannelClosed` variants.
+    pub fn code(&self) -> Option<u32> {
+        match self {
+            PtyExitStatus::Code(c) => Some(*c),
+            _ => None,
+        }
+    }
+}
+
+/// A non-blocking, channel-based handle to a running remote PTY session.
+///
+/// `PtyHandle` provides a programmatic interface for embedding a PTY
+/// session inside a TUI pane or any custom I/O loop. It does not manage
+/// raw mode, stdin/stdout, or SIGWINCH — those are the caller's
+/// responsibility.
+///
+/// # Example
+///
+/// ```ignore
+/// let mut handle = session.pty_builder()
+///     .with_term("xterm-256color")
+///     .with_size(80, 24)
+///     .open()
+///     .await?;
+///
+/// // Send input
+/// handle.write(b"ls -la\n").await?;
+///
+/// // Read output
+/// while let Some(data) = handle.read().await {
+///     process_terminal_output(&data);
+/// }
+///
+/// let status = handle.wait().await?;
+/// ```
+pub struct PtyHandle {
+    input_tx: mpsc::Sender<Vec<u8>>,
+    output_rx: mpsc::Receiver<Vec<u8>>,
+    resize_tx: mpsc::Sender<(u32, u32)>,
+    task_handle: Option<JoinHandle<Result<PtyExitStatus>>>,
+    exit_rx: watch::Receiver<Option<PtyExitStatus>>,
+    closed: bool,
+}
+
+impl std::fmt::Debug for PtyHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PtyHandle")
+            .field("closed", &self.closed)
+            .field("task_running", &self.task_handle.is_some())
+            .finish()
+    }
+}
+
+impl PtyHandle {
+    /// Sends input data to the remote PTY.
+    ///
+    /// The data is sent as-is, including any escape sequences.
+    /// Returns an error if the background task has already exited.
+    pub async fn write(&self, data: &[u8]) -> Result<()> {
+        self.input_tx
+            .send(data.to_vec())
+            .await
+            .map_err(|_| anyhow!("PTY input channel closed"))
+    }
+
+    /// Receives raw terminal output from the remote PTY.
+    ///
+    /// Returns `None` when the channel is closed (session ended).
+    /// The output includes raw escape sequences suitable for a
+    /// terminal emulator.
+    pub async fn read(&mut self) -> Option<Vec<u8>> {
+        self.output_rx.recv().await
+    }
+
+    /// Sends a window resize event to the remote PTY.
+    ///
+    /// # Arguments
+    ///
+    /// * `cols` - New number of columns
+    /// * `rows` - New number of rows
+    pub async fn resize(&self, cols: u32, rows: u32) -> Result<()> {
+        self.resize_tx
+            .send((cols, rows))
+            .await
+            .map_err(|_| anyhow!("PTY resize channel closed"))
+    }
+
+    /// Consumes the handle and waits for the remote PTY to exit.
+    ///
+    /// Returns the exit status of the remote process.
+    pub async fn wait(mut self) -> Result<PtyExitStatus> {
+        if let Some(handle) = self.task_handle.take() {
+            handle.await?
+        } else {
+            Ok(PtyExitStatus::ChannelClosed)
+        }
+    }
+
+    /// Non-blocking check for whether the PTY has exited.
+    ///
+    /// Returns `Some(status)` if the process has exited, `None` if
+    /// still running.
+    pub fn try_wait(&self) -> Option<PtyExitStatus> {
+        self.exit_rx.borrow().clone()
+    }
+
+    /// Closes the input side of the PTY, sending EOF to the remote.
+    ///
+    /// After calling this, no more input can be sent.
+    pub fn close(&mut self) {
+        self.closed = true;
+        // Dropping the sender signals EOF to the background task
+        // We replace with a closed channel
+        let (tx, _) = mpsc::channel(1);
+        self.input_tx = tx;
+    }
+}
+
+impl Drop for PtyHandle {
+    fn drop(&mut self) {
+        if let Some(handle) = self.task_handle.take() {
+            handle.abort();
+        }
+    }
+}
+
+/// Returns sensible default terminal modes for PTY sessions.
+///
+/// These modes enable proper behavior for interactive programs
+/// including alt-mode applications like vim and nano.
+fn default_pty_terminal_modes() -> Vec<(Pty, u32)> {
+    vec![
+        (Pty::ICRNL, 1),
+        (Pty::IXON, 0),
+        (Pty::IXANY, 0),
+        (Pty::IMAXBEL, 0),
+        (Pty::IUTF8, 1),
+        (Pty::OPOST, 1),
+        (Pty::ONLCR, 1),
+        (Pty::ISIG, 1),
+        (Pty::ICANON, 0),
+        (Pty::ECHO, 1),
+        (Pty::ECHOE, 1),
+        (Pty::ECHOK, 1),
+        (Pty::ECHOCTL, 1),
+        (Pty::ECHOKE, 1),
+        (Pty::IEXTEN, 1),
+        (Pty::CS8, 1),
+        (Pty::TTY_OP_ISPEED, 38400),
+        (Pty::TTY_OP_OSPEED, 38400),
+    ]
+}
+
+/// Background task that bridges channel-based I/O with a remote PTY session.
+///
+/// Handles input forwarding, output collection, resize events, and
+/// exit status detection without any terminal or signal management.
+async fn pty_io_task(
+    mut channel: Channel<Msg>,
+    mut input_rx: mpsc::Receiver<Vec<u8>>,
+    output_tx: mpsc::Sender<Vec<u8>>,
+    mut resize_rx: mpsc::Receiver<(u32, u32)>,
+    exit_tx: watch::Sender<Option<PtyExitStatus>>,
+) -> Result<PtyExitStatus> {
+    let status = loop {
+        tokio::select! {
+            res = input_rx.recv() => {
+                match res {
+                    Some(data) => {
+                        channel.data(&data[..]).await?;
+                    }
+                    None => {
+                        // Input channel closed - send EOF to remote
+                        channel.eof().await?;
+                    }
+                }
+            }
+            msg = channel.wait() => {
+                match msg {
+                    Some(ChannelMsg::Data { ref data }) => {
+                        // If the receiver is dropped, we still continue
+                        // to process channel messages for exit status
+                        let _ = output_tx.send(data.to_vec()).await;
+                    }
+                    Some(ChannelMsg::ExitStatus { exit_status }) => {
+                        break PtyExitStatus::Code(exit_status);
+                    }
+                    Some(ChannelMsg::ExitSignal {
+                        signal_name,
+                        core_dumped,
+                        error_message,
+                        ..
+                    }) => {
+                        break PtyExitStatus::Signal {
+                            signal_name,
+                            core_dumped,
+                            error_message,
+                        };
+                    }
+                    None => {
+                        break PtyExitStatus::ChannelClosed;
+                    }
+                    _ => {}
+                }
+            }
+            Some((cols, rows)) = resize_rx.recv() => {
+                let _ = channel.window_change(cols, rows, 0, 0).await;
+            }
+        }
+    };
+
+    // Drain remaining output after exit status
+    drain_remaining_output(&mut channel, &output_tx).await;
+
+    let _ = exit_tx.send(Some(status.clone()));
+    Ok(status)
+}
+
+/// Drains any remaining data from the channel after an exit status is received.
+///
+/// Programs like nano send terminal cleanup sequences after their exit status,
+/// so we need to forward those to the output channel.
+async fn drain_remaining_output(channel: &mut Channel<Msg>, output_tx: &mpsc::Sender<Vec<u8>>) {
+    loop {
+        tokio::select! {
+            msg = channel.wait() => {
+                match msg {
+                    Some(ChannelMsg::Data { ref data }) => {
+                        let _ = output_tx.send(data.to_vec()).await;
+                    }
+                    _ => break,
+                }
+            }
+            _ = tokio::time::sleep(Duration::from_secs(1)) => {
+                break;
+            }
+        }
+    }
 }
 
 /// Resolves a hostname and port to a socket address.
@@ -196,7 +464,7 @@ impl<'sb> Session {
     ///
     /// Returns an error if no connection is established.
     pub async fn pty(&mut self) -> Result<u32> {
-        self.inner.pty().await
+        self.pty_builder().run().await
     }
 
     /// Creates a PTY builder for advanced terminal configuration.
@@ -222,6 +490,7 @@ impl<'sb> Session {
             height: height as u32,
             command: None,
             auto_resize: false,
+            terminal_modes: None,
         }
     }
 
@@ -342,6 +611,7 @@ pub struct PtyBuilder<'a> {
     height: u32,
     command: Option<String>,
     auto_resize: bool,
+    terminal_modes: Option<Vec<(Pty, u32)>>,
 }
 
 impl<'a> PtyBuilder<'a> {
@@ -400,11 +670,76 @@ impl<'a> PtyBuilder<'a> {
         self
     }
 
+    /// Sets custom terminal modes for the PTY request.
+    ///
+    /// If not set, [`default_pty_terminal_modes()`] is used automatically.
+    /// Pass an empty slice to disable terminal modes entirely.
+    ///
+    /// # Arguments
+    ///
+    /// * `modes` - Slice of (Pty, u32) terminal mode settings
+    pub fn with_terminal_modes(mut self, modes: &[(Pty, u32)]) -> Self {
+        self.terminal_modes = Some(modes.to_vec());
+        self
+    }
+
+    /// Opens a programmatic PTY session and returns a [`PtyHandle`].
+    ///
+    /// Unlike [`run()`](PtyBuilder::run), this does not manage stdin/stdout,
+    /// raw mode, or SIGWINCH. The caller controls all I/O through the
+    /// returned handle.
+    ///
+    /// # Returns
+    ///
+    /// A [`PtyHandle`] for interacting with the remote PTY.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no connection is established or the PTY
+    /// request fails.
+    pub async fn open(self) -> Result<PtyHandle> {
+        let command = self
+            .command
+            .unwrap_or_else(|| self.session.inner.get_command());
+        let Some(sess) = self.session.inner.get_session() else {
+            return Err(Error::msg("No open session"));
+        };
+
+        let modes = self
+            .terminal_modes
+            .unwrap_or_else(default_pty_terminal_modes);
+
+        let channel = sess.channel_open_session().await?;
+
+        channel
+            .request_pty(false, &self.term, self.width, self.height, 0, 0, &modes)
+            .await?;
+        channel.exec(true, command).await?;
+
+        let (input_tx, input_rx) = mpsc::channel(64);
+        let (output_tx, output_rx) = mpsc::channel(256);
+        let (resize_tx, resize_rx) = mpsc::channel(4);
+        let (exit_tx, exit_rx) = watch::channel(None);
+
+        let task_handle = tokio::spawn(pty_io_task(
+            channel, input_rx, output_tx, resize_rx, exit_tx,
+        ));
+
+        Ok(PtyHandle {
+            input_tx,
+            output_rx,
+            resize_tx,
+            task_handle: Some(task_handle),
+            exit_rx,
+            closed: false,
+        })
+    }
+
     /// Executes the PTY session with the configured options.
     ///
-    /// This method consumes the builder and runs the interactive session.
-    /// The session runs until the remote command exits or the connection is
-    /// terminated.
+    /// This method consumes the builder and runs the interactive session,
+    /// connecting the remote PTY to local stdin/stdout with optional raw
+    /// mode and SIGWINCH handling.
     ///
     /// # Returns
     ///
@@ -414,23 +749,101 @@ impl<'a> PtyBuilder<'a> {
     ///
     /// Returns an error if the PTY cannot be established or the session fails.
     pub async fn run(self) -> Result<u32> {
-        let command = self
-            .command
-            .unwrap_or_else(|| self.session.inner.get_command());
-        let Some(sess) = self.session.inner.get_session() else {
-            return Err(Error::msg("No open session"));
+        let raw_mode = self.raw_mode;
+        let auto_resize = self.auto_resize;
+
+        let mut handle = self.open().await?;
+
+        let mut stdin = tokio::io::stdin();
+        let mut stdout = tokio::io::stdout();
+        let mut buf = vec![0; 1024];
+        let mut stdin_closed = false;
+
+        let _raw_guard = if raw_mode {
+            setup_panic_hook();
+            enable_raw_mode()?;
+            Some(RawGuard)
+        } else {
+            None
         };
 
-        pty_with_options(
-            sess,
-            &command,
-            &self.term,
-            self.width,
-            self.height,
-            self.raw_mode,
-            self.auto_resize,
-        )
-        .await
+        #[cfg(unix)]
+        let mut winch_signal = if auto_resize {
+            let sig =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change())?;
+            Some(sig)
+        } else {
+            None
+        };
+
+        let status_result: Result<PtyExitStatus> = loop {
+            tokio::select! {
+                r = stdin.read(&mut buf), if !stdin_closed => {
+                    match r {
+                        Ok(0) => {
+                            stdin_closed = true;
+                            handle.close();
+                        },
+                        Ok(n) => {
+                            if let Err(e) = handle.write(&buf[..n]).await {
+                                write_reset_sequences(&mut stdout, raw_mode).await;
+                                drop(_raw_guard);
+                                clear_stdin_buffer();
+                                return Err(e);
+                            }
+                        }
+                        Err(e) => {
+                            write_reset_sequences(&mut stdout, raw_mode).await;
+                            drop(_raw_guard);
+                            clear_stdin_buffer();
+                            return Err(e.into());
+                        }
+                    };
+                },
+                data = handle.read() => {
+                    match data {
+                        Some(bytes) => {
+                            stdout.write_all(&bytes).await?;
+                            stdout.flush().await?;
+                        }
+                        None => {
+                            // Output channel closed — session ended
+                            let wait_res = handle.wait().await;
+                            break wait_res.map_err(|e| anyhow::anyhow!("{}", e));
+                        }
+                    }
+                },
+                _ = async {
+                    #[cfg(unix)]
+                    if let Some(ref mut sig) = winch_signal {
+                        sig.recv().await;
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        std::future::pending::<()>().await;
+                    }
+                }, if auto_resize => {
+                    if let Ok((w, h)) = size() {
+                        let _ = handle.resize(w as u32, h as u32).await;
+                    }
+                },
+            }
+        };
+
+        // Write reset sequences while still in raw mode
+        write_reset_sequences(&mut stdout, raw_mode).await;
+
+        // Now safe to disable raw mode
+        drop(_raw_guard);
+
+        // Clear any pending stdin
+        clear_stdin_buffer();
+
+        // Ensure stdout is flushed
+        stdout.flush().await?;
+
+        let status = status_result?;
+        Ok(status.code().unwrap_or(255))
     }
 }
 
@@ -773,16 +1186,6 @@ impl SessionInner {
         }
     }
 
-    async fn pty(&mut self) -> Result<u32> {
-        let command = self.get_command();
-
-        let Some(sess) = self.get_session() else {
-            return Err(Error::msg("No open session"));
-        };
-
-        pty(sess, &command).await
-    }
-
     async fn close(&mut self) -> Result<()> {
         let Some(sess) = self.get_session() else {
             return Ok(());
@@ -967,85 +1370,6 @@ impl SessionInner {
 
 /******************************************** Helper ********************************************/
 
-/// Opens a PTY session and runs an interactive shell.
-///
-/// # Arguments
-///
-/// * `session` - The SSH session handle
-/// * `command` - The command to execute in the PTY
-///
-/// # Returns
-///
-/// The exit code of the shell session.
-async fn pty(session: &mut client::Handle<Client>, command: &str) -> Result<u32> {
-    let mut channel = session.channel_open_session().await?;
-
-    // This example doesn't terminal resizing after the connection is established
-    let (w, h) = size()?;
-
-    // Request an interactive PTY from the server
-    channel
-        .request_pty(
-            false,
-            &env::var("TERM").unwrap_or("xterm".into()),
-            w as u32,
-            h as u32,
-            0,
-            0,
-            &[], // ideally you want to pass the actual terminal modes here
-        )
-        .await?;
-    channel.exec(true, command).await?;
-
-    let code;
-    let mut stdin = tokio::io::stdin();
-    let mut stdout = tokio::io::stdout();
-    let mut buf = vec![0; 1024];
-    let mut stdin_closed = false;
-
-    loop {
-        // Handle one of the possible events:
-        tokio::select! {
-            // There's terminal input available from the user
-            r = stdin.read(&mut buf), if !stdin_closed => {
-                match r {
-                    Ok(0) => {
-                        stdin_closed = true;
-                        channel.eof().await?;
-                    },
-                    // Send it to the server
-                    Ok(n) => channel.data(&buf[..n]).await?,
-                    Err(e) => return Err(e.into()),
-                };
-            },
-            // There's an event available on the session channel
-            msg = channel.wait() => {
-                match msg {
-                    // Write data to the terminal
-                    Some(ChannelMsg::Data { ref data }) => {
-                        stdout.write_all(data).await?;
-                        stdout.flush().await?;
-                    }
-                    // The command has returned an exit code
-                    Some(ChannelMsg::ExitStatus { exit_status }) => {
-                        code = exit_status;
-                        if !stdin_closed {
-                            channel.eof().await?;
-                        }
-                        break;
-                    }
-                    // Channel closed unexpectedly
-                    None => {
-                        return Err(Error::msg("Channel closed unexpectedly"));
-                    }
-                    _ => {}
-                }
-            },
-        }
-    }
-    Ok(code)
-}
-
 /// RAII guard for raw terminal mode (cross-platform).
 ///
 /// When dropped, automatically restores the terminal to its original mode.
@@ -1093,126 +1417,6 @@ fn clear_stdin_buffer() {
             }
         }
     }
-}
-
-async fn pty_with_options(
-    session: &mut client::Handle<Client>,
-    command: &str,
-    term: &str,
-    width: u32,
-    height: u32,
-    raw_mode: bool,
-    auto_resize: bool,
-) -> Result<u32> {
-    let mut channel = session.channel_open_session().await?;
-
-    channel
-        .request_pty(false, term, width, height, 0, 0, &[])
-        .await?;
-    channel.exec(true, command).await?;
-
-    let mut stdin = tokio::io::stdin();
-    let mut stdout = tokio::io::stdout();
-    let mut buf = vec![0; 1024];
-    let mut stdin_closed = false;
-
-    let _raw_guard = if raw_mode {
-        setup_panic_hook();
-        enable_raw_mode()?;
-        Some(RawGuard)
-    } else {
-        None
-    };
-
-    #[cfg(unix)]
-    let mut winch_signal = if auto_resize {
-        let sig = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change())?;
-        Some(sig)
-    } else {
-        None
-    };
-
-    let code = loop {
-        tokio::select! {
-            r = stdin.read(&mut buf), if !stdin_closed => {
-                match r {
-                    Ok(0) => {
-                        stdin_closed = true;
-                        channel.eof().await?;
-                    },
-                    Ok(n) => channel.data(&buf[..n]).await?,
-                    Err(e) => {
-                        write_reset_sequences(&mut stdout, raw_mode).await;
-                        drop(_raw_guard);
-                        clear_stdin_buffer();
-                        return Err(e.into());
-                    }
-                };
-            },
-            msg = channel.wait() => {
-                match msg {
-                    Some(ChannelMsg::Data { ref data }) => {
-                        stdout.write_all(data).await?;
-                        stdout.flush().await?;
-                    }
-                    Some(ChannelMsg::ExitStatus { exit_status }) => {
-                        if !stdin_closed {
-                            channel.eof().await?;
-                        }
-                        // Drain any remaining data from the channel before exiting
-                        // to ensure terminal cleanup sequences from apps like nano are processed
-                        loop {
-                            tokio::select! {
-                                msg = channel.wait() => {
-                                    match msg {
-                                        Some(ChannelMsg::Data { ref data }) => {
-                                            stdout.write_all(data).await?;
-                                            stdout.flush().await?;
-                                        }
-                                        _ => break,
-                                    }
-                                }
-                                _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {
-                                    break;
-                                }
-                            }
-                        }
-                        break exit_status;
-                    }
-                    None => {
-                        write_reset_sequences(&mut stdout, raw_mode).await;
-                        drop(_raw_guard);
-                        clear_stdin_buffer();
-                        return Err(Error::msg("Channel closed unexpectedly"));
-                    }
-                    _ => {}
-                }
-            },
-            _ = async {
-                if let Some(ref mut sig) = winch_signal {
-                    sig.recv().await;
-                }
-            }, if auto_resize => {
-                if let Ok((w, h)) = size() {
-                    let _ = channel.window_change(w as u32, h as u32, 0, 0).await;
-                }
-            },
-        }
-    };
-
-    // Write reset sequences while still in raw mode to ensure they're processed
-    write_reset_sequences(&mut stdout, raw_mode).await;
-
-    // Now safe to disable raw mode
-    drop(_raw_guard);
-
-    // Clear any pending stdin to prevent it from appearing in the shell prompt
-    clear_stdin_buffer();
-
-    // Ensure stdout is flushed before returning to shell
-    stdout.flush().await?;
-
-    Ok(code)
 }
 
 /// Gracefully closes an SSH session.
@@ -2682,4 +2886,150 @@ async fn test_pty_builder_uses_session_command() {
     let expected_cmd: String = builder.session.inner.get_command();
     assert!(expected_cmd.contains("zsh"));
     assert!(expected_cmd.contains("-l"));
+}
+
+#[test]
+fn test_pty_exit_status_code_variant() {
+    let status = PtyExitStatus::Code(0);
+    assert_eq!(status.code(), Some(0));
+
+    let status = PtyExitStatus::Code(42);
+    assert_eq!(status.code(), Some(42));
+
+    let status = PtyExitStatus::Code(255);
+    assert_eq!(status.code(), Some(255));
+}
+
+#[test]
+fn test_pty_exit_status_signal_variant() {
+    let status = PtyExitStatus::Signal {
+        signal_name: Sig::TERM,
+        core_dumped: false,
+        error_message: "terminated".to_string(),
+    };
+    assert_eq!(status.code(), None);
+}
+
+#[test]
+fn test_pty_exit_status_channel_closed_variant() {
+    let status = PtyExitStatus::ChannelClosed;
+    assert_eq!(status.code(), None);
+}
+
+#[test]
+fn test_default_pty_terminal_modes_non_empty() {
+    let modes = default_pty_terminal_modes();
+    assert!(!modes.is_empty());
+
+    // Verify some expected modes are present
+    assert!(modes.contains(&(Pty::ICRNL, 1)));
+    assert!(modes.contains(&(Pty::ECHO, 1)));
+    assert!(modes.contains(&(Pty::IUTF8, 1)));
+    assert!(modes.contains(&(Pty::TTY_OP_ISPEED, 38400)));
+    assert!(modes.contains(&(Pty::TTY_OP_OSPEED, 38400)));
+}
+
+#[test]
+fn test_pty_builder_terminal_modes_default_none() {
+    let session = Session::init()
+        .with_host("localhost")
+        .with_user("user")
+        .with_passwd("pass")
+        .build()
+        .unwrap();
+
+    let mut session_mut = session;
+    let builder = session_mut.pty_builder();
+    assert!(builder.terminal_modes.is_none());
+}
+
+#[test]
+fn test_pty_builder_with_terminal_modes() {
+    let session = Session::init()
+        .with_host("localhost")
+        .with_user("user")
+        .with_passwd("pass")
+        .build()
+        .unwrap();
+
+    let mut session_mut = session;
+    let custom_modes = vec![(Pty::ECHO, 0), (Pty::CS8, 1)];
+    let builder = session_mut.pty_builder().with_terminal_modes(&custom_modes);
+
+    assert_eq!(builder.terminal_modes, Some(custom_modes));
+}
+
+#[test]
+fn test_pty_builder_with_empty_terminal_modes() {
+    let session = Session::init()
+        .with_host("localhost")
+        .with_user("user")
+        .with_passwd("pass")
+        .build()
+        .unwrap();
+
+    let mut session_mut = session;
+    let builder = session_mut.pty_builder().with_terminal_modes(&[]);
+    assert_eq!(builder.terminal_modes, Some(vec![]));
+}
+
+#[tokio::test]
+async fn test_pty_builder_open_no_session() {
+    let mut session = Session::init()
+        .with_host("localhost")
+        .with_user("user")
+        .with_passwd("pass")
+        .build()
+        .unwrap();
+
+    let result = session.pty_builder().open().await;
+    assert!(result.is_err());
+    assert_eq!(result.unwrap_err().to_string(), "No open session");
+}
+
+#[tokio::test]
+async fn test_pty_builder_open_with_modes_no_session() {
+    let mut session = Session::init()
+        .with_host("localhost")
+        .with_user("user")
+        .with_passwd("pass")
+        .build()
+        .unwrap();
+
+    let result = session
+        .pty_builder()
+        .with_terminal_modes(&[(Pty::ECHO, 1)])
+        .open()
+        .await;
+    assert!(result.is_err());
+    assert_eq!(result.unwrap_err().to_string(), "No open session");
+}
+
+#[test]
+fn test_pty_builder_full_config_with_modes() {
+    let session = Session::init()
+        .with_host("localhost")
+        .with_user("user")
+        .with_passwd("pass")
+        .build()
+        .unwrap();
+
+    let mut session_mut = session;
+    let modes = vec![(Pty::ECHO, 0), (Pty::ICANON, 0)];
+    let builder = session_mut
+        .pty_builder()
+        .with_raw()
+        .with_term("xterm-256color")
+        .with_size(120, 40)
+        .with_command("/bin/sh")
+        .with_auto_resize()
+        .with_terminal_modes(&modes);
+
+    assert!(builder.raw_mode);
+    assert_eq!(builder.term, "xterm-256color");
+    assert_eq!(builder.width, 120);
+    assert_eq!(builder.height, 40);
+    assert_eq!(builder.command, Some("/bin/sh".to_string()));
+    assert!(builder.auto_resize);
+    assert_eq!(builder.terminal_modes, Some(modes));
 }
