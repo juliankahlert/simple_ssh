@@ -50,9 +50,14 @@ use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
 use crate::client::Msg;
+use crate::pty_mode::ModeDetection;
 
 pub use russh::Pty;
 pub use russh::Sig;
+
+pub mod pty_mode;
+
+pub use pty_mode::{ModeChangeEvent, ModeDetectionConfig, ModeWatcher, PtyMode};
 
 static PANIC_HOOK_SET: std::sync::Once = std::sync::Once::new();
 static PREV_PANIC_HOOK: std::sync::Mutex<
@@ -163,6 +168,7 @@ pub struct PtyHandle {
     task_handle: Option<JoinHandle<Result<PtyExitStatus>>>,
     exit_rx: watch::Receiver<Option<PtyExitStatus>>,
     closed: bool,
+    mode_detection: Option<Arc<ModeDetection>>,
 }
 
 impl std::fmt::Debug for PtyHandle {
@@ -237,6 +243,39 @@ impl PtyHandle {
         let (tx, _) = mpsc::channel(1);
         self.input_tx = tx;
     }
+
+    /// Returns the current PTY mode if detection is enabled.
+    pub fn current_mode(&self) -> Option<PtyMode> {
+        self.mode_detection
+            .as_ref()
+            .map(|md: &Arc<ModeDetection>| md.current_mode())
+    }
+
+    /// Returns true if currently in alternate buffer mode.
+    pub fn is_alt_mode(&self) -> bool {
+        self.mode_detection
+            .as_ref()
+            .map(|md: &Arc<ModeDetection>| md.current_mode().is_alternate())
+            .unwrap_or(false)
+    }
+
+    /// Returns true if currently in standard buffer mode.
+    pub fn is_std_mode(&self) -> bool {
+        self.mode_detection
+            .as_ref()
+            .map(|md: &Arc<ModeDetection>| md.current_mode().is_standard())
+            .unwrap_or(true)
+    }
+
+    /// Creates a watcher for mode change events.
+    ///
+    /// Returns a `ModeWatcher` that can be used to await mode changes.
+    /// This enables async patterns like `tokio::select!` integration.
+    pub fn watch_mode(&self) -> Option<ModeWatcher> {
+        self.mode_detection
+            .as_ref()
+            .map(|md: &Arc<ModeDetection>| md.create_watcher())
+    }
 }
 
 impl Drop for PtyHandle {
@@ -284,6 +323,7 @@ async fn pty_io_task(
     output_tx: mpsc::Sender<Vec<u8>>,
     mut resize_rx: mpsc::Receiver<(u32, u32)>,
     exit_tx: watch::Sender<Option<PtyExitStatus>>,
+    mode_detection: Option<Arc<ModeDetection>>,
 ) -> Result<PtyExitStatus> {
     let status = loop {
         tokio::select! {
@@ -301,6 +341,9 @@ async fn pty_io_task(
             msg = channel.wait() => {
                 match msg {
                     Some(ChannelMsg::Data { ref data }) => {
+                        if let Some(md) = mode_detection.as_ref() {
+                            md.feed(data);
+                        }
                         // If the receiver is dropped, we still continue
                         // to process channel messages for exit status
                         let _ = output_tx.send(data.to_vec()).await;
@@ -333,7 +376,7 @@ async fn pty_io_task(
     };
 
     // Drain remaining output after exit status
-    drain_remaining_output(&mut channel, &output_tx).await;
+    drain_remaining_output(&mut channel, &output_tx, mode_detection.as_deref()).await;
 
     let _ = exit_tx.send(Some(status.clone()));
     Ok(status)
@@ -343,12 +386,19 @@ async fn pty_io_task(
 ///
 /// Programs like nano send terminal cleanup sequences after their exit status,
 /// so we need to forward those to the output channel.
-async fn drain_remaining_output(channel: &mut Channel<Msg>, output_tx: &mpsc::Sender<Vec<u8>>) {
+async fn drain_remaining_output(
+    channel: &mut Channel<Msg>,
+    output_tx: &mpsc::Sender<Vec<u8>>,
+    mode_detection: Option<&ModeDetection>,
+) {
     loop {
         tokio::select! {
             msg = channel.wait() => {
                 match msg {
                     Some(ChannelMsg::Data { ref data }) => {
+                        if let Some(md) = mode_detection {
+                            md.feed(data);
+                        }
                         let _ = output_tx.send(data.to_vec()).await;
                     }
                     _ => break,
@@ -491,6 +541,7 @@ impl<'sb> Session {
             command: None,
             auto_resize: false,
             terminal_modes: None,
+            mode_detection_config: None,
         }
     }
 
@@ -612,6 +663,7 @@ pub struct PtyBuilder<'a> {
     command: Option<String>,
     auto_resize: bool,
     terminal_modes: Option<Vec<(Pty, u32)>>,
+    mode_detection_config: Option<pty_mode::ModeDetectionConfig>,
 }
 
 impl<'a> PtyBuilder<'a> {
@@ -683,6 +735,28 @@ impl<'a> PtyBuilder<'a> {
         self
     }
 
+    /// Enables PTY mode detection with default config.
+    ///
+    /// This enables detection of alternate screen buffer mode changes,
+    /// allowing users to detect when full-screen applications like vim
+    /// or nano are running.
+    pub fn with_mode_detection(mut self) -> Self {
+        self.mode_detection_config = Some(pty_mode::ModeDetectionConfig {
+            enabled: true,
+            ..pty_mode::ModeDetectionConfig::default()
+        });
+        self
+    }
+
+    /// Enables PTY mode detection with custom config.
+    ///
+    /// This enables detection of alternate screen buffer mode changes
+    /// with custom configuration options.
+    pub fn with_mode_detection_config(mut self, config: pty_mode::ModeDetectionConfig) -> Self {
+        self.mode_detection_config = Some(config);
+        self
+    }
+
     /// Opens a programmatic PTY session and returns a [`PtyHandle`].
     ///
     /// Unlike [`run()`](PtyBuilder::run), this does not manage stdin/stdout,
@@ -721,8 +795,17 @@ impl<'a> PtyBuilder<'a> {
         let (resize_tx, resize_rx) = mpsc::channel(4);
         let (exit_tx, exit_rx) = watch::channel(None);
 
+        let mode_detection: Option<Arc<ModeDetection>> = self
+            .mode_detection_config
+            .map(|config| Arc::new(ModeDetection::new(config)));
+
         let task_handle = tokio::spawn(pty_io_task(
-            channel, input_rx, output_tx, resize_rx, exit_tx,
+            channel,
+            input_rx,
+            output_tx,
+            resize_rx,
+            exit_tx,
+            mode_detection.clone(),
         ));
 
         Ok(PtyHandle {
@@ -732,6 +815,7 @@ impl<'a> PtyBuilder<'a> {
             task_handle: Some(task_handle),
             exit_rx,
             closed: false,
+            mode_detection,
         })
     }
 
@@ -3032,4 +3116,104 @@ fn test_pty_builder_full_config_with_modes() {
     assert_eq!(builder.command, Some("/bin/sh".to_string()));
     assert!(builder.auto_resize);
     assert_eq!(builder.terminal_modes, Some(modes));
+}
+
+#[test]
+fn test_pty_builder_with_mode_detection_default_config() {
+    let session = Session::init()
+        .with_host("localhost")
+        .with_user("user")
+        .with_passwd("pass")
+        .build()
+        .unwrap();
+
+    let mut session_mut = session;
+    let builder = session_mut.pty_builder().with_mode_detection();
+
+    assert!(builder.mode_detection_config.is_some());
+}
+
+#[test]
+fn test_pty_builder_with_mode_detection_custom_config() {
+    let session = Session::init()
+        .with_host("localhost")
+        .with_user("user")
+        .with_passwd("pass")
+        .build()
+        .unwrap();
+
+    let mut session_mut = session;
+    let config = pty_mode::ModeDetectionConfig::default();
+    let builder = session_mut.pty_builder().with_mode_detection_config(config);
+
+    assert!(builder.mode_detection_config.is_some());
+}
+
+#[test]
+fn test_pty_builder_mode_detection_disabled_by_default() {
+    let session = Session::init()
+        .with_host("localhost")
+        .with_user("user")
+        .with_passwd("pass")
+        .build()
+        .unwrap();
+
+    let mut session_mut = session;
+    let builder = session_mut.pty_builder();
+
+    assert!(builder.mode_detection_config.is_none());
+}
+
+#[tokio::test]
+async fn test_pty_handle_mode_detection_disabled_returns_none() {
+    let (input_tx, _input_rx) = mpsc::channel(64);
+    let (_output_tx, output_rx) = mpsc::channel(256);
+    let (resize_tx, _resize_rx) = mpsc::channel(4);
+    let (_exit_tx, exit_rx) = watch::channel(None);
+
+    let mode_detection: Option<Arc<ModeDetection>> = None;
+
+    let handle = PtyHandle {
+        input_tx,
+        output_rx,
+        resize_tx,
+        task_handle: None,
+        exit_rx,
+        closed: false,
+        mode_detection,
+    };
+
+    assert!(handle.current_mode().is_none());
+    assert!(handle.is_std_mode());
+}
+
+#[tokio::test]
+async fn test_pty_handle_mode_detection_enabled_shared_instance() {
+    let config = ModeDetectionConfig {
+        enabled: true,
+        buffer_size: 256,
+    };
+    let mode_detection = Arc::new(ModeDetection::new(config));
+
+    let (input_tx, _input_rx) = mpsc::channel(64);
+    let (_output_tx, output_rx) = mpsc::channel(256);
+    let (resize_tx, _resize_rx) = mpsc::channel(4);
+    let (_exit_tx, exit_rx) = watch::channel(None);
+
+    let handle = PtyHandle {
+        input_tx,
+        output_rx,
+        resize_tx,
+        task_handle: None,
+        exit_rx,
+        closed: false,
+        mode_detection: Some(mode_detection.clone()),
+    };
+
+    let handle_mode_detection = handle.mode_detection.clone();
+    assert!(handle_mode_detection.is_some());
+    assert!(handle.current_mode().is_some());
+    assert!(!handle.is_alt_mode());
+    assert!(handle.is_std_mode());
+    assert_eq!(mode_detection.current_mode(), PtyMode::Standard);
 }
