@@ -25,7 +25,7 @@ default:
 full-check:
     cargo test
     cargo clippy
-    cargo build --examples
+    cargo build --bin simple-ssh --bin simple-scp --features cli
     coderabbit review --base main --prompt-only -t uncommitted
 
 # Build the container image with all build tools
@@ -43,38 +43,38 @@ shell:
 # Build for the native target
 development:
     @printf "\033[38;2;210;210;210m[development]\033[0m "
-    @printf "Building examples for native target (debug)...\n"
-    cargo build --examples
+    @printf "Building CLI binaries for native target (debug)...\n"
+    cargo build --bin simple-ssh --bin simple-scp --features cli
 
 # Build for native target in release mode
 release:
     @printf "\033[38;2;210;210;210m[release]\033[0m "
-    @printf "Building examples for native target (release)...\n"
-    cargo build --release --examples
+    @printf "Building CLI binaries for native target (release)...\n"
+    cargo build --release --bin simple-ssh --bin simple-scp --features cli
 
 # Build for x86_64 musl target
 musl-amd64:
     @printf "\033[38;2;210;210;210m[musl-amd64]\033[0m "
-    @printf "Building examples for x86_64-unknown-linux-musl...\n"
-    cargo build --release --target x86_64-unknown-linux-musl --examples
+    @printf "Building CLI binaries for x86_64-unknown-linux-musl...\n"
+    cargo build --release --target x86_64-unknown-linux-musl --bin simple-ssh --bin simple-scp --features cli
 
 # Build for i686 musl target
 musl-i686:
     @printf "\033[38;2;210;210;210m[musl-i686]\033[0m "
-    @printf "Building examples for i686-unknown-linux-musl...\n"
-    cargo build --release --target i686-unknown-linux-musl --examples
+    @printf "Building CLI binaries for i686-unknown-linux-musl...\n"
+    cargo build --release --target i686-unknown-linux-musl --bin simple-ssh --bin simple-scp --features cli
 
 # Build for aarch64 musl target
 musl-aarch64:
     @printf "\033[38;2;210;210;210m[musl-aarch64]\033[0m "
-    @printf "Building examples for aarch64-unknown-linux-musl...\n"
-    cargo build --release --target aarch64-unknown-linux-musl --examples
+    @printf "Building CLI binaries for aarch64-unknown-linux-musl...\n"
+    cargo build --release --target aarch64-unknown-linux-musl --bin simple-ssh --bin simple-scp --features cli
 
 # Build for arm musl target
 musl-arm:
     @printf "\033[38;2;210;210;210m[musl-arm]\033[0m "
-    @printf "Building examples for arm-unknown-linux-musleabihf...\n"
-    cargo build --release --target arm-unknown-linux-musleabihf --examples
+    @printf "Building CLI binaries for arm-unknown-linux-musleabihf...\n"
+    cargo build --release --target arm-unknown-linux-musleabihf --bin simple-ssh --bin simple-scp --features cli
 
 # Build for all musl targets
 musl-all: musl-amd64 musl-i686 musl-aarch64 musl-arm
@@ -153,18 +153,18 @@ help:
     @printf "  Set \033[38;2;245;210;157mCONTAINER_ENGINE=docker\033[0m or \033[38;2;245;210;157mCONTAINER_ENGINE=podman\033[0m to override\n"
     @printf "\n"
     @printf "\033[1m\033[38;2;190;150;245mRequired before committing:\033[0m\n"
-    @printf "  \033[38;2;157;210;157mjust full-check\033[0m         - Run tests, clippy, build, and coderabbit review\n"
+    @printf "  \033[38;2;157;210;157mjust full-check\033[0m         - Run tests, clippy, build CLI binaries (simple-ssh, simple-scp), and coderabbit review\n"
     @printf "\n"
     @printf "\033[1m\033[38;2;157;210;180mSetup:\033[0m\n"
     @printf "  \033[38;2;245;194;122mjust build-image\033[0m        - Build the simple-ssh-builder container image\n"
     @printf "\n"
     @printf "\033[1m\033[38;2;157;180;245mLocal builds (requires Rust installed):\033[0m\n"
-    @printf "  \033[38;2;210;210;210mjust development\033[0m        - Build examples for native target (debug)\n"
-    @printf "  \033[38;2;210;210;210mjust release\033[0m            - Build examples for native target (release)\n"
-    @printf "  \033[38;2;210;210;210mjust musl-amd64\033[0m         - Build examples for x86_64 musl\n"
-    @printf "  \033[38;2;210;210;210mjust musl-i686\033[0m          - Build examples for i686 musl\n"
-    @printf "  \033[38;2;210;210;210mjust musl-aarch64\033[0m       - Build examples for aarch64 musl\n"
-    @printf "  \033[38;2;210;210;210mjust musl-arm\033[0m           - Build examples for arm musl\n"
+    @printf "  \033[38;2;210;210;210mjust development\033[0m        - Build CLI binaries for native target (debug)\n"
+    @printf "  \033[38;2;210;210;210mjust release\033[0m            - Build CLI binaries for native target (release)\n"
+    @printf "  \033[38;2;210;210;210mjust musl-amd64\033[0m         - Build CLI binaries for x86_64 musl\n"
+    @printf "  \033[38;2;210;210;210mjust musl-i686\033[0m          - Build CLI binaries for i686 musl\n"
+    @printf "  \033[38;2;210;210;210mjust musl-aarch64\033[0m       - Build CLI binaries for aarch64 musl\n"
+    @printf "  \033[38;2;210;210;210mjust musl-arm\033[0m           - Build CLI binaries for arm musl\n"
     @printf "  \033[38;2;210;210;210mjust musl-all\033[0m           - Build all musl targets\n"
     @printf "  \033[38;2;210;210;210mjust build-all\033[0m          - Build all targets\n"
     @printf "\n"

@@ -1,5 +1,7 @@
 # simple_ssh
 
+[![Rust Report Card](https://rust-reportcard.xuri.me/badge/github.com/juliankahlert/simple_ssh)](https://rust-reportcard.xuri.me/report/github.com/juliankahlert/simple_ssh)
+
 **`simple_ssh`** is a lightweight, asynchronous Rust library that simplifies SSH operations such as executing remote commands, transferring files via SCP, and interactive PTY sessions. Built on top of the [`russh`](https://github.com/Eugeny/russh) and [`russh-keys`](https://github.com/Eugeny/russh) crates, it offers a streamlined API for secure and efficient SSH interactions.
 
 ## Features
@@ -17,12 +19,24 @@
 
 ## Installation
 
-Add `simple_ssh` to your project's `Cargo.toml`
+### As a Library
+
+Add `simple_ssh` to your project's `Cargo.toml`:
 
 ```toml
 [dependencies]
-simple_ssh = { git = "https://github.com/juliankahlert/simple_ssh", branch = "main" }
+simple_ssh = "0.1.3"
 ```
+
+### CLI Tools
+
+To install the CLI binaries (`simple-ssh` and `simple-scp`), use the `cli` feature:
+
+```bash
+cargo install simple_ssh --features cli
+```
+
+This installs both `simple-ssh` and `simple-scp` binaries to your cargo bin directory.
 
 ## Usage
 
@@ -238,8 +252,8 @@ cargo build
 cargo build --release
 
 # Build CLI examples
-cargo build --example simple-ssh
-cargo build --example simple-scp
+cargo build --bin simple-ssh --features cli
+cargo build --bin simple-scp --features cli
 
 # Static musl build (for distribution)
 cargo build --release --target x86_64-unknown-linux-musl

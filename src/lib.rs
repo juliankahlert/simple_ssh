@@ -22,6 +22,44 @@
  * SOFTWARE.
  */
 
+//! Simple async SSH client for Rust.
+//!
+//! A lightweight, asynchronous library built on top of `russh` and `russh-keys`
+//! that simplifies SSH operations such as executing remote commands, transferring
+//! files via SCP, and interactive PTY sessions.
+//!
+//! # Quick Start
+//!
+//! ```no_run
+//! use simple_ssh::Session;
+//!
+//! #[tokio::main]
+//! async fn main() -> anyhow::Result<()> {
+//!     let mut ssh = Session::init()
+//!         .with_host("example.com")
+//!         .with_user("admin")
+//!         .with_passwd("secret")
+//!         .build()?
+//!         .connect()
+//!         .await?;
+//!
+//!     let code = ssh.cmd("ls -la").await?;
+//!     println!("Exit code: {}", code);
+//!
+//!     ssh.close().await?;
+//!     Ok(())
+//! }
+//! ```
+//!
+//! # Features
+//!
+//! - Execute remote commands (`cmd`, `exec`, `system`)
+//! - Transfer files via SCP protocol
+//! - Interactive PTY sessions with raw mode
+//! - Programmatic PTY sessions via `PtyHandle` for TUI embedding
+//! - Public key, password, and certificate authentication
+//! - IPv6 link-local address support
+
 use std::env;
 use std::io::Write;
 use std::net::{SocketAddr, ToSocketAddrs};
@@ -59,10 +97,11 @@ pub mod pty_mode;
 
 pub use pty_mode::{ModeChangeEvent, ModeDetectionConfig, ModeWatcher, PtyMode};
 
+/// Type alias for the previous panic hook handler.
+type PanicHook = Box<dyn Fn(&panic::PanicHookInfo<'_>) + Send + Sync>;
+
 static PANIC_HOOK_SET: std::sync::Once = std::sync::Once::new();
-static PREV_PANIC_HOOK: std::sync::Mutex<
-    Option<Box<dyn Fn(&panic::PanicHookInfo<'_>) + Send + Sync>>,
-> = std::sync::Mutex::new(None);
+static PREV_PANIC_HOOK: std::sync::Mutex<Option<PanicHook>> = std::sync::Mutex::new(None);
 
 fn setup_panic_hook() {
     PANIC_HOOK_SET.call_once(|| {
