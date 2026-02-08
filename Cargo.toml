@@ -1,7 +1,22 @@
 [package]
 name = "simple_ssh"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
+
+description = "Simple async SSH for Rust"
+license = "MIT"
+repository = "https://github.com/juliankahlert/simple_ssh"
+readme = "README.md"
+keywords = ["ssh"]
+categories = ["network-programming"]
+
+include = [
+    "src/**",
+    "examples/**",
+    "Cargo.toml",
+    "README.md",
+    "LICENSE*",
+]
 
 [profile.release]
 lto = true
