@@ -5,11 +5,14 @@
 ## Features
 
 - Asynchronous SSH client operations using `tokio`
-- Execute remote shell commands with ease
+- Execute remote shell commands (`cmd`, `exec`, `system`)
 - Transfer files securely using the SCP protocol
-- Interactive PTY shell sessions
+- Interactive PTY shell sessions with raw mode and auto-resize
+- Programmatic PTY sessions via `PtyHandle` for embedding in TUIs
+- Terminal multiplexer support (1x2, 2x1, 2x2 layouts)
 - IPv6 link-local address support with scope ID
-- Public key and password authentication
+- Authentication modes: public key, password, and none
+- SSH certificate support for key authentication
 - Minimalistic and focused API design
 
 ## Installation
@@ -18,7 +21,7 @@ Add `simple_ssh` to your project's `Cargo.toml`
 
 ```toml
 [dependencies]
-simple_ssh = { git = "https://github.com/juliankahlert/simple_ssh", tag = "v0.1.1" }
+simple_ssh = { git = "https://github.com/juliankahlert/simple_ssh", branch = "main" }
 ```
 
 ## Usage
@@ -41,7 +44,16 @@ async fn main() -> Result<()> {
     let mut ssh = session.connect().await?;
     println!("Connected");
 
+    // Execute a shell command
     let code = ssh.cmd("ls -la").await?;
+    println!("Exitcode: {:?}", code);
+
+    // Execute with arguments (properly escaped)
+    let code = ssh.exec(&["ls", "-la", "/tmp"].iter().map(|s| s.to_string()).collect()).await?;
+    println!("Exitcode: {code}");
+
+    // Execute via sh -c (like system())
+    let code = ssh.system("echo $HOME && ls -la").await?;
     println!("Exitcode: {:?}", code);
 
     ssh.close().await?;
@@ -96,9 +108,58 @@ async fn main() -> Result<()> {
 }
 ```
 
-## CLI Tool
+### Programmatic PTY Sessions
 
-A statically compiled `simple-ssh` binary is included for direct command-line use:
+For non-interactive PTY sessions where you control the I/O (e.g., embedding in a TUI):
+
+```rust
+use simple_ssh::Session;
+use anyhow::Result;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let session = Session::init()
+        .with_host("192.168.0.100")
+        .with_user("root")
+        .with_passwd("toor")
+        .build()?;
+
+    let mut ssh = session.connect().await?;
+
+    // Open a PTY handle for programmatic control
+    let mut handle = ssh
+        .pty_builder()
+        .with_term("xterm-256color")
+        .with_size(80, 24)
+        .open()
+        .await?;
+
+    // Send input
+    handle.write(b"ls -la\n").await?;
+
+    // Exit the shell so handle.read() returns None and handle.wait() completes
+    handle.write(b"exit\n").await?;
+
+    // Read output - loop ends when shell exits and handle.read() returns None
+    while let Some(data) = handle.read().await {
+        println!("Received: {:?}", data);
+    }
+
+    // Wait for exit status
+    let status = handle.wait().await?;
+    println!("Exit status: {:?}", status.code());
+
+    Ok(())
+}
+```
+
+## CLI Tools
+
+Two example binaries are provided for command-line use:
+
+### simple-ssh
+
+Interactive SSH client with PTY support and terminal multiplexing:
 
 ```bash
 # Interactive shell
@@ -112,9 +173,35 @@ simple-ssh -H server.example.com -i /path/to/key
 
 # IPv6 link-local with scope
 simple-ssh -H fe80::1%eth0 -u root -P password
+
+# Terminal multiplexer (2 panes stacked vertically)
+simple-ssh -H 192.168.1.1 -u root -P password --mux 1x2
+
+# Terminal multiplexer (2 panes side by side)
+simple-ssh -H 192.168.1.1 -u root -P password --mux 2x1
+
+# Terminal multiplexer (4 panes in 2x2 grid)
+simple-ssh -H 192.168.1.1 -u root -P password --mux 2x2
+```
+
+### simple-scp
+
+File transfer utility:
+
+```bash
+# Transfer file using password authentication
+simple-scp -H 192.168.1.1 -u root -P password /local/file.txt /remote/path.txt
+
+# Transfer file using private key
+simple-scp -H server.example.com -i /path/to/key /local/file.txt /remote/path.txt
+
+# With custom port
+simple-scp -H 192.168.1.1 -p 2222 -u admin -P secret /local/file.txt /remote/path.txt
 ```
 
 ### CLI Options
+
+#### simple-ssh Options
 
 | Option | Description |
 |--------|-------------|
@@ -125,6 +212,21 @@ simple-ssh -H fe80::1%eth0 -u root -P password
 | `-p, --port <PORT>` | SSH port (default: 22) |
 | `--scope <SCOPE>` | IPv6 scope ID (e.g., interface name or number) |
 | `-a, --auth <AUTH>` | Authentication method (password, key, none) |
+| `--mux <MODE>` | Terminal multiplexer mode: 1x2, 2x1, or 2x2 |
+
+#### simple-scp Options
+
+| Option | Description |
+|--------|-------------|
+| `-H, --host <HOST>` | SSH host to connect to (required) |
+| `-u, --user <USER>` | SSH username (default: root) |
+| `-P, --passwd <PASSWD>` | SSH password |
+| `-i, --key <KEY>` | Path to private key file |
+| `-p, --port <PORT>` | SSH port (default: 22) |
+| `--scope <SCOPE>` | IPv6 scope ID (e.g., interface name or number) |
+| `-a, --auth <AUTH>` | Authentication method (password, key, none) |
+| `<LOCAL>` | Local file path to upload |
+| `<REMOTE>` | Remote destination path |
 
 ## Building
 
@@ -134,6 +236,10 @@ cargo build
 
 # Release build
 cargo build --release
+
+# Build CLI examples
+cargo build --example simple-ssh
+cargo build --example simple-scp
 
 # Static musl build (for distribution)
 cargo build --release --target x86_64-unknown-linux-musl
@@ -156,9 +262,9 @@ cargo test -- --nocapture
 
 ## Development Status
 
-`simple_ssh` is currently in early development.
-While the core functionalities are implemented, the API may undergo changes.
-Contributions, issues, and feature requests are welcome!
+`simple_ssh` is actively developed and provides a stable API for common SSH operations.
+The core functionalities including command execution, SCP file transfer, and PTY sessions
+are fully implemented and tested. Contributions, issues, and feature requests are welcome!
 
 ## License
 
