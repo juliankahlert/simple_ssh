@@ -6,13 +6,13 @@ edition = "2021"
 description = "Simple async SSH for Rust"
 license = "MIT"
 repository = "https://github.com/juliankahlert/simple_ssh"
+homepage = "https://juliankahlert.github.io/simple_ssh"
 readme = "README.md"
-keywords = ["ssh"]
-categories = ["network-programming"]
+keywords = ["ssh", "async", "scp", "pty", "russh"]
+categories = ["network-programming", "asynchronous"]
 
 include = [
     "src/**",
-    "examples/**",
     "Cargo.toml",
     "README.md",
     "LICENSE*",
@@ -39,19 +39,23 @@ log = "0.4.27"
 env_logger = { version = "0.6", default-features = false }
 shell-escape = "0.1"
 crossterm = { version = "0.29.0", features = ["event-stream"] }
+clap = { version = "4.5.56", features = ["derive"], optional = true }
+futures = { version = "0.3", optional = true }
+vt100 = { version = "0.16", optional = true }
 
-[dev-dependencies]
-clap = { version = "4.4", features = ["derive"] }
-vt100 = "0.16"
-futures = "0.3"
+[features]
+default = []
+cli = ["dep:clap", "dep:futures", "dep:vt100"]
 
-[[example]]
+[[bin]]
 name = "simple-ssh"
-path = "examples/simple-ssh.rs"
+path = "src/bin/simple-ssh.rs"
+required-features = ["cli"]
 
-[[example]]
+[[bin]]
 name = "simple-scp"
-path = "examples/simple-scp.rs"
+path = "src/bin/simple-scp.rs"
+required-features = ["cli"]
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

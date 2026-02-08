@@ -420,17 +420,17 @@ fn render_pane(stdout: &mut std::io::Stdout, pane: &Pane) -> Result<()> {
                 let mut removed: Vec<Attribute> = Vec::new();
                 if cell.bold() {
                     attrs.push(Attribute::Bold);
-                } else if prev_attrs.contains(&Attribute::Bold) {
-                    if !removed.contains(&Attribute::NormalIntensity) {
-                        removed.push(Attribute::NormalIntensity);
-                    }
                 }
                 if cell.dim() {
                     attrs.push(Attribute::Dim);
-                } else if prev_attrs.contains(&Attribute::Dim) {
-                    if !removed.contains(&Attribute::NormalIntensity) {
-                        removed.push(Attribute::NormalIntensity);
-                    }
+                }
+                if !cell.bold()
+                    && !cell.dim()
+                    && (prev_attrs.contains(&Attribute::Bold)
+                        || prev_attrs.contains(&Attribute::Dim))
+                    && !removed.contains(&Attribute::NormalIntensity)
+                {
+                    removed.push(Attribute::NormalIntensity);
                 }
                 if cell.italic() {
                     attrs.push(Attribute::Italic);
