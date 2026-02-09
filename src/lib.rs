@@ -314,10 +314,15 @@ impl PtyHandle {
     ///
     /// Returns a `ModeWatcher` that can be used to await mode changes.
     /// This enables async patterns like `tokio::select!` integration.
-    pub fn watch_mode(&self) -> Option<ModeWatcher> {
-        self.mode_detection
-            .as_ref()
-            .map(|md: &Arc<ModeDetection>| md.create_watcher())
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if mode detection is not enabled.
+    pub fn watch_mode(&self) -> Result<ModeWatcher> {
+        match self.mode_detection.as_ref() {
+            Some(md) => md.create_watcher(),
+            None => Err(anyhow!("mode detection is not enabled")),
+        }
     }
 
     /// Returns the current working directory if PWD detection is enabled
@@ -331,11 +336,15 @@ impl PtyHandle {
     /// Creates a watcher for PWD change events.
     ///
     /// Returns a `PwdWatcher` that can be used to await directory changes.
-    /// Returns `None` if PWD detection is not enabled.
-    pub fn watch_pwd(&self) -> Option<PwdWatcher> {
-        self.pwd_detection
-            .as_ref()
-            .map(|pd: &Arc<PwdDetection>| pd.create_watcher())
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if PWD detection is not enabled.
+    pub fn watch_pwd(&self) -> Result<PwdWatcher> {
+        match self.pwd_detection.as_ref() {
+            Some(pd) => pd.create_watcher(),
+            None => Err(anyhow!("PWD detection is not enabled")),
+        }
     }
 }
 
@@ -3392,7 +3401,7 @@ async fn test_pty_handle_pwd_detection_disabled_returns_none() {
     };
 
     assert!(handle.current_pwd().is_none());
-    assert!(handle.watch_pwd().is_none());
+    assert!(handle.watch_pwd().is_err());
 }
 
 #[tokio::test]
@@ -3420,7 +3429,7 @@ async fn test_pty_handle_pwd_detection_enabled_shared_instance() {
     };
 
     assert!(handle.current_pwd().is_none());
-    assert!(handle.watch_pwd().is_some());
+    assert!(handle.watch_pwd().is_ok());
 
     pwd_detection.feed(b"\x1b]7;file://host/home/user\x07");
     assert_eq!(handle.current_pwd(), Some("/home/user".to_string()));
