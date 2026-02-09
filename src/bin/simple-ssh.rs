@@ -29,7 +29,7 @@ use std::borrow::Cow;
 use std::path::PathBuf;
 use tokio::time::{timeout, Duration};
 
-use simple_ssh::{PtyExitStatus, Session};
+use simple_ssh::{PtyExitStatus, PwdWatcher, Session};
 use std::io::Write as _;
 
 use crossterm::{
@@ -320,18 +320,48 @@ fn calculate_layouts(cols: u16, rows: u16, mode: &MuxMode) -> Vec<PaneLayout> {
     }
 }
 
+/// Formats the pane title with optional PWD, truncating with ellipsis if needed.
+///
+/// `max_width` is the number of characters available between `┌` and `┐`.
+fn format_pane_title(idx_label: &str, pwd: Option<&str>, max_width: usize) -> String {
+    let Some(path) = pwd else {
+        return idx_label.to_string();
+    };
+
+    // Need at least space for "[N] X" (label + space + 1 path char)
+    let min_path_display = idx_label.len() + 2;
+    if max_width < min_path_display {
+        return idx_label.to_string();
+    }
+
+    let max_path_cols = max_width - idx_label.len() - 1; // -1 for space separator
+    let path_chars: usize = path.chars().count();
+    if path_chars <= max_path_cols {
+        format!("{} {}", idx_label, path)
+    } else if max_path_cols >= 2 {
+        // Truncate from beginning with ellipsis
+        let suffix_chars = max_path_cols - 1; // -1 for '…'
+        let suffix: String = path.chars().skip(path_chars - suffix_chars).collect();
+        format!("{} \u{2026}{}", idx_label, suffix)
+    } else {
+        idx_label.to_string()
+    }
+}
+
 fn draw_pane_box(
     stdout: &mut std::io::Stdout,
     pane_idx: usize,
     layout: &PaneLayout,
     focused: bool,
+    pwd: Option<&str>,
 ) -> Result<()> {
     let color = if focused {
         Color::Cyan
     } else {
         Color::DarkGrey
     };
-    let title = format!("[{}]", pane_idx + 1);
+    let idx_label = format!("[{}]", pane_idx + 1);
+    let title = format_pane_title(&idx_label, pwd, layout.width as usize);
     let left_x = layout.x - 1;
     let right_x = layout.x + layout.width;
     let bottom_y = layout.y + layout.height + 1;
@@ -341,7 +371,8 @@ fn draw_pane_box(
     queue!(stdout, cursor::MoveTo(left_x, layout.y))?;
     queue!(stdout, Print('┌'))?;
     queue!(stdout, Print(&title))?;
-    for _ in (left_x + 1 + title.len() as u16)..right_x {
+    let title_cols = title.chars().count() as u16;
+    for _ in (left_x + 1 + title_cols)..right_x {
         queue!(stdout, Print('─'))?;
     }
     queue!(stdout, cursor::MoveTo(right_x, layout.y))?;
@@ -369,9 +400,11 @@ fn draw_borders(
     stdout: &mut std::io::Stdout,
     focused: usize,
     layouts: &[PaneLayout],
+    pwd_watchers: &[PwdWatcher],
 ) -> Result<()> {
     for (i, layout) in layouts.iter().enumerate() {
-        draw_pane_box(stdout, i, layout, i == focused)?;
+        let pwd = pwd_watchers[i].current();
+        draw_pane_box(stdout, i, layout, i == focused, pwd.as_deref())?;
     }
     Ok(())
 }
@@ -676,6 +709,7 @@ async fn mux_session(args: &Args, mode: &MuxMode) -> Result<()> {
     let mut pane_proxies = Vec::new();
     let mut sessions = Vec::new();
     let mut panes = Vec::new();
+    let mut pwd_watchers = Vec::new();
 
     for (i, layout) in layouts.iter().enumerate() {
         let session = build_session_from_args(args)?;
@@ -695,6 +729,7 @@ async fn mux_session(args: &Args, mode: &MuxMode) -> Result<()> {
             .pty_builder()
             .with_term("xterm-256color")
             .with_size(layout.width as u32, layout.height as u32)
+            .with_pwd_detection(true)
             .open()
             .await
         {
@@ -702,6 +737,14 @@ async fn mux_session(args: &Args, mode: &MuxMode) -> Result<()> {
             Err(e) => {
                 cleanup_mux(&mut stdout, &mut sessions).await;
                 return Err(anyhow!("Pane {} PTY open failed: {}", i, e));
+            }
+        };
+
+        let watcher = match handle.watch_pwd() {
+            Ok(w) => w,
+            Err(e) => {
+                cleanup_mux(&mut stdout, &mut sessions).await;
+                return Err(anyhow!("Pane {} PWD watcher failed: {}", i, e));
             }
         };
 
@@ -716,6 +759,7 @@ async fn mux_session(args: &Args, mode: &MuxMode) -> Result<()> {
             resize_tx,
         });
         sessions.push(ssh);
+        pwd_watchers.push(watcher);
         panes.push(Pane {
             layout: layout.clone(),
             parser: vt100::Parser::new(layout.height, layout.width, 0),
@@ -728,7 +772,7 @@ async fn mux_session(args: &Args, mode: &MuxMode) -> Result<()> {
     let mut focused: usize = 0;
     let mut input_state = InputState::Normal;
 
-    draw_borders(&mut stdout, focused, &layouts)?;
+    draw_borders(&mut stdout, focused, &layouts, &pwd_watchers)?;
     stdout.flush()?;
 
     let mut event_stream = EventStream::new();
@@ -779,6 +823,7 @@ async fn mux_session(args: &Args, mode: &MuxMode) -> Result<()> {
                                             focused = new_focus;
                                             draw_borders(
                                                 &mut stdout, focused, &layouts,
+                                                &pwd_watchers,
                                             )?;
                                             position_cursor(
                                                 &mut stdout, &panes[focused],
@@ -810,6 +855,7 @@ async fn mux_session(args: &Args, mode: &MuxMode) -> Result<()> {
                         queue!(stdout, Clear(ClearType::All))?;
                         draw_borders(
                             &mut stdout, focused, &layouts,
+                            &pwd_watchers,
                         )?;
                         for pane in &panes {
                             render_pane(&mut stdout, pane)?;
@@ -825,6 +871,11 @@ async fn mux_session(args: &Args, mode: &MuxMode) -> Result<()> {
                 match mux_event {
                     MuxEvent::PtyOutput { pane, data } => {
                         panes[pane].parser.process(&data);
+                        let pwd = pwd_watchers[pane].current();
+                        draw_pane_box(
+                            &mut stdout, pane, &panes[pane].layout,
+                            pane == focused, pwd.as_deref(),
+                        )?;
                         render_pane(&mut stdout, &panes[pane])?;
                         if pane == focused {
                             position_cursor(&mut stdout, &panes[focused])?;
