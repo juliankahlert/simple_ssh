@@ -216,12 +216,12 @@ impl ModeDetection {
 
     /// Returns the current PTY mode without blocking.
     pub(crate) fn current_mode(&self) -> PtyMode {
-        *self.current_mode.lock().unwrap()
+        *self.current_mode.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Updates the current mode and notifies all watchers.
     pub(crate) fn update_mode(&self, new_mode: PtyMode) {
-        let mut current = self.current_mode.lock().unwrap();
+        let mut current = self.current_mode.lock().unwrap_or_else(|e| e.into_inner());
         if *current != new_mode {
             *current = new_mode;
             let _ = self.event_tx.send(new_mode);
@@ -235,7 +235,7 @@ impl ModeDetection {
         if !self.enabled {
             return;
         }
-        let mut parser = self.parser.lock().unwrap();
+        let mut parser = self.parser.lock().unwrap_or_else(|e| e.into_inner());
         let events = parser.feed(data);
         for event in events {
             match event {
@@ -249,7 +249,7 @@ impl ModeDetection {
     pub(crate) fn create_watcher(&self) -> ModeWatcher {
         ModeWatcher {
             inner: self.event_rx.clone(),
-            last_known: *self.current_mode.lock().unwrap(),
+            last_known: *self.current_mode.lock().unwrap_or_else(|e| e.into_inner()),
         }
     }
 }
