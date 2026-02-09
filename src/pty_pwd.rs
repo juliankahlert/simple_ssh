@@ -23,8 +23,8 @@
  */
 
 use anyhow::Result;
+use parking_lot::Mutex;
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::time::Instant;
 use tokio::sync::watch;
 
@@ -254,18 +254,14 @@ impl PwdDetection {
 
     /// Returns the current working directory, if known.
     pub(crate) fn current_pwd(&self) -> Option<String> {
-        self.current_pwd
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .as_ref()
-            .map(|(s, _)| s.clone())
+        self.current_pwd.lock().as_ref().map(|(s, _)| s.clone())
     }
 
     /// Updates the current PWD and notifies all watchers.
     ///
     /// Only sends notifications when the path actually changes.
     pub(crate) fn update_pwd(&self, new_pwd: String) {
-        let mut current = self.current_pwd.lock().unwrap_or_else(|e| e.into_inner());
+        let mut current = self.current_pwd.lock();
         let changed = match current.as_ref() {
             Some((old, _)) => old != &new_pwd,
             None => true,
@@ -284,7 +280,7 @@ impl PwdDetection {
         if !self.enabled {
             return;
         }
-        let mut parser = self.parser.lock().unwrap_or_else(|e| e.into_inner());
+        let mut parser = self.parser.lock();
         let paths = parser.feed(data);
         drop(parser);
         for path in paths {
@@ -296,11 +292,7 @@ impl PwdDetection {
     pub(crate) fn create_watcher(&self) -> Result<PwdWatcher> {
         Ok(PwdWatcher {
             inner: self.event_rx.clone(),
-            last_known: self
-                .current_pwd
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .clone(),
+            last_known: self.current_pwd.lock().clone(),
         })
     }
 }

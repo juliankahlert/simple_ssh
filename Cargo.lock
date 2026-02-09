@@ -1755,6 +1755,7 @@ dependencies = [
  "futures",
  "libc",
  "log",
+ "parking_lot",
  "russh",
  "russh-keys",
  "shell-escape",
