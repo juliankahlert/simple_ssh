@@ -23,8 +23,8 @@
  */
 
 use anyhow::Result;
+use parking_lot::Mutex;
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::time::Instant;
 use tokio::sync::watch;
 
@@ -217,12 +217,12 @@ impl ModeDetection {
 
     /// Returns the current PTY mode without blocking.
     pub(crate) fn current_mode(&self) -> PtyMode {
-        *self.current_mode.lock().unwrap_or_else(|e| e.into_inner())
+        *self.current_mode.lock()
     }
 
     /// Updates the current mode and notifies all watchers.
     pub(crate) fn update_mode(&self, new_mode: PtyMode) {
-        let mut current = self.current_mode.lock().unwrap_or_else(|e| e.into_inner());
+        let mut current = self.current_mode.lock();
         if *current != new_mode {
             *current = new_mode;
             let _ = self.event_tx.send(new_mode);
@@ -236,7 +236,7 @@ impl ModeDetection {
         if !self.enabled {
             return;
         }
-        let mut parser = self.parser.lock().unwrap_or_else(|e| e.into_inner());
+        let mut parser = self.parser.lock();
         let events = parser.feed(data);
         for event in events {
             match event {
@@ -250,7 +250,7 @@ impl ModeDetection {
     pub(crate) fn create_watcher(&self) -> Result<ModeWatcher> {
         Ok(ModeWatcher {
             inner: self.event_rx.clone(),
-            last_known: *self.current_mode.lock().unwrap_or_else(|e| e.into_inner()),
+            last_known: *self.current_mode.lock(),
         })
     }
 }

@@ -42,6 +42,7 @@ crossterm = { version = "0.29.0", features = ["event-stream"] }
 clap = { version = "4.5.56", features = ["derive"], optional = true }
 futures = { version = "0.3", optional = true }
 vt100 = { version = "0.16", optional = true }
+parking_lot = "0.12"
 
 [features]
 default = []

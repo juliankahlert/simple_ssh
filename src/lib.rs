@@ -104,20 +104,17 @@ pub use pty_pwd::{PwdChangeEvent, PwdDetectionConfig, PwdWatcher};
 type PanicHook = Box<dyn Fn(&panic::PanicHookInfo<'_>) + Send + Sync>;
 
 static PANIC_HOOK_SET: std::sync::Once = std::sync::Once::new();
-static PREV_PANIC_HOOK: std::sync::Mutex<Option<PanicHook>> = std::sync::Mutex::new(None);
+static PREV_PANIC_HOOK: parking_lot::Mutex<Option<PanicHook>> = parking_lot::const_mutex(None);
 
 fn setup_panic_hook() {
     PANIC_HOOK_SET.call_once(|| {
         let prev_hook = panic::take_hook();
-        if let Ok(mut guard) = PREV_PANIC_HOOK.lock() {
-            *guard = Some(prev_hook);
-        }
+        *PREV_PANIC_HOOK.lock() = Some(prev_hook);
         panic::set_hook(Box::new(|panic_info| {
             terminal_cleanup();
-            if let Ok(guard) = PREV_PANIC_HOOK.lock() {
-                if let Some(ref hook) = *guard {
-                    hook(panic_info);
-                }
+            let guard = PREV_PANIC_HOOK.lock();
+            if let Some(ref hook) = *guard {
+                hook(panic_info);
             }
         }));
     });
