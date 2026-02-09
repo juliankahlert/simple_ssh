@@ -22,7 +22,6 @@
  * SOFTWARE.
  */
 
-use anyhow::Result;
 use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::Instant;
@@ -247,11 +246,11 @@ impl ModeDetection {
     }
 
     /// Creates a new watcher for observing mode changes.
-    pub(crate) fn create_watcher(&self) -> Result<ModeWatcher> {
-        Ok(ModeWatcher {
+    pub(crate) fn create_watcher(&self) -> ModeWatcher {
+        ModeWatcher {
             inner: self.event_rx.clone(),
             last_known: *self.current_mode.lock(),
-        })
+        }
     }
 }
 

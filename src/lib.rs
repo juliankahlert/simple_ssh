@@ -317,7 +317,7 @@ impl PtyHandle {
     /// Returns an error if mode detection is not enabled.
     pub fn watch_mode(&self) -> Result<ModeWatcher> {
         match self.mode_detection.as_ref() {
-            Some(md) => md.create_watcher(),
+            Some(md) => Ok(md.create_watcher()),
             None => Err(anyhow!("mode detection is not enabled")),
         }
     }
@@ -840,15 +840,18 @@ impl<'a> PtyBuilder<'a> {
         self
     }
 
-    /// Enables PWD (working directory) detection with default config.
+    /// Enables PWD (working directory) detection.
     ///
-    /// This enables detection of the remote shell's working directory
-    /// via OSC 7 and OSC 633 escape sequences. The remote shell must
-    /// emit these sequences — fish does this by default, while bash
-    /// and zsh require configuration.
-    pub fn with_pwd_detection(mut self) -> Self {
+    /// When `inject` is false, passive detection only — the remote shell
+    /// must already emit OSC 7/633/9;9/1337 sequences.
+    ///
+    /// When `inject` is true, the library automatically configures the
+    /// remote shell to emit OSC 7 sequences, so PWD detection works
+    /// out of the box without user shell configuration.
+    pub fn with_pwd_detection(mut self, inject: bool) -> Self {
         self.pwd_detection_config = Some(pty_pwd::PwdDetectionConfig {
             enabled: true,
+            inject,
             ..pty_pwd::PwdDetectionConfig::default()
         });
         self
@@ -892,6 +895,30 @@ impl<'a> PtyBuilder<'a> {
 
         let channel = sess.channel_open_session().await?;
 
+        // PWD injection: try set_env for PROMPT_COMMAND, then wrap exec command
+        let inject_pwd = self.pwd_detection_config.as_ref().is_some_and(|c| c.inject);
+
+        let zsh_inject = if inject_pwd {
+            // Layer 1: try set_env (works for bash if server AcceptEnv allows)
+            if let Some(prompt_cmd) = pty_pwd::osc7_prompt_command() {
+                let _ = channel.set_env(false, "PROMPT_COMMAND", &prompt_cmd).await;
+            }
+            // Detect if zsh needs input injection instead of exec wrapping
+            pty_pwd::detect_shell(&command) == pty_pwd::Shell::Zsh
+        } else {
+            false
+        };
+
+        // Layer 2: wrap exec command with shell-specific setup (not for zsh)
+        let command = if inject_pwd && !zsh_inject {
+            match pty_pwd::osc7_injection_snippet(&command) {
+                Some(snippet) => format!("{} {}", snippet, command),
+                None => command,
+            }
+        } else {
+            command
+        };
+
         channel
             .request_pty(false, &self.term, self.width, self.height, 0, 0, &modes)
             .await?;
@@ -901,6 +928,13 @@ impl<'a> PtyBuilder<'a> {
         let (output_tx, output_rx) = mpsc::channel(256);
         let (resize_tx, resize_rx) = mpsc::channel(4);
         let (exit_tx, exit_rx) = watch::channel(None);
+
+        // Zsh injection: send precmd hook setup as initial input
+        if zsh_inject {
+            let setup =
+                "precmd(){printf '\\033]7;file://%s%s\\a' \"$HOST\" \"$PWD\"};precmd;clear\n";
+            input_tx.send(setup.as_bytes().to_vec()).await.ok();
+        }
 
         let mode_detection: Option<Arc<ModeDetection>> = self
             .mode_detection_config
@@ -3343,9 +3377,30 @@ fn test_pty_builder_with_pwd_detection_default_config() {
         .unwrap();
 
     let mut session_mut = session;
-    let builder = session_mut.pty_builder().with_pwd_detection();
+    let builder = session_mut.pty_builder().with_pwd_detection(false);
 
     assert!(builder.pwd_detection_config.is_some());
+    let config = builder.pwd_detection_config.unwrap();
+    assert!(config.enabled);
+    assert!(!config.inject);
+}
+
+#[test]
+fn test_pty_builder_with_pwd_detection_inject() {
+    let session = Session::init()
+        .with_host("localhost")
+        .with_user("user")
+        .with_passwd("pass")
+        .build()
+        .unwrap();
+
+    let mut session_mut = session;
+    let builder = session_mut.pty_builder().with_pwd_detection(true);
+
+    assert!(builder.pwd_detection_config.is_some());
+    let config = builder.pwd_detection_config.unwrap();
+    assert!(config.enabled);
+    assert!(config.inject);
 }
 
 #[test]
@@ -3405,6 +3460,7 @@ async fn test_pty_handle_pwd_detection_disabled_returns_none() {
 async fn test_pty_handle_pwd_detection_enabled_shared_instance() {
     let config = PwdDetectionConfig {
         enabled: true,
+        inject: false,
         buffer_size: 2048,
     };
     let pwd_detection = Arc::new(PwdDetection::new(config));
