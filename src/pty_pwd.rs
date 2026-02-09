@@ -44,6 +44,12 @@ pub struct PwdChangeEvent {
 pub struct PwdDetectionConfig {
     /// Whether to enable PWD detection (default: false)
     pub enabled: bool,
+    /// Whether to inject OSC 7 reporting into the remote shell (default: false)
+    ///
+    /// When enabled, the library automatically configures the remote shell
+    /// to emit OSC 7 sequences, so PWD detection works out of the box
+    /// without requiring user shell configuration.
+    pub inject: bool,
     /// Buffer size for OSC payload parsing (default: 2048 bytes)
     pub buffer_size: usize,
 }
@@ -52,6 +58,7 @@ impl Default for PwdDetectionConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            inject: false,
             buffer_size: 2048,
         }
     }
@@ -69,7 +76,9 @@ enum OscParserState {
 ///
 /// Recognizes:
 /// - OSC 7: `\x1b]7;file://hostname/path\x07` (or ST-terminated)
+/// - OSC 9;9: `\x1b]9;9;path\x07` (ConEmu/Windows Terminal)
 /// - OSC 633: `\x1b]633;P;Cwd=/path\x07` (VS Code shell integration)
+/// - OSC 1337: `\x1b]1337;CurrentDir=/path\x07` (iTerm2)
 struct OscParser {
     buffer: Vec<u8>,
     state: OscParserState,
@@ -156,8 +165,24 @@ impl OscParser {
             return self.parse_osc7_url(rest);
         }
 
+        // OSC 9;9: "9;9;path" (ConEmu/Windows Terminal)
+        if let Some(rest) = payload.strip_prefix("9;9;") {
+            let decoded = percent_decode(rest);
+            if !decoded.is_empty() {
+                return Some(decoded);
+            }
+        }
+
         // OSC 633: "633;P;Cwd=/path"
         if let Some(rest) = payload.strip_prefix("633;P;Cwd=") {
+            let decoded = percent_decode(rest);
+            if !decoded.is_empty() {
+                return Some(decoded);
+            }
+        }
+
+        // OSC 1337: "1337;CurrentDir=/path" (iTerm2)
+        if let Some(rest) = payload.strip_prefix("1337;CurrentDir=") {
             let decoded = percent_decode(rest);
             if !decoded.is_empty() {
                 return Some(decoded);
@@ -225,6 +250,59 @@ fn hex_digit(b: u8) -> Option<u8> {
         b'a'..=b'f' => Some(b - b'a' + 10),
         b'A'..=b'F' => Some(b - b'A' + 10),
         _ => None,
+    }
+}
+
+/// Recognized shell types for PWD injection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Shell {
+    Bash,
+    Zsh,
+    Fish,
+    Other,
+}
+
+/// Detects the shell type from a command string.
+///
+/// Extracts the last path component, splits off arguments, strips quotes
+/// and a leading `-` (login shells), and matches against known shell names.
+pub(crate) fn detect_shell(command: &str) -> Shell {
+    let basename = command.split('/').next_back().unwrap_or(command);
+    let token = basename.split_whitespace().next().unwrap_or(basename);
+    let token = token.trim_matches('"').trim_matches('\'');
+    let name = token.strip_prefix('-').unwrap_or(token);
+
+    match name {
+        "bash" => Shell::Bash,
+        "zsh" => Shell::Zsh,
+        "fish" => Shell::Fish,
+        "sh" | "dash" | "ksh" | "ash" => Shell::Other,
+        _ => Shell::Other,
+    }
+}
+
+/// Returns the PROMPT_COMMAND value for OSC 7 reporting.
+///
+/// Suitable for use with `channel.set_env("PROMPT_COMMAND", ...)`.
+pub(crate) fn osc7_prompt_command() -> Option<String> {
+    Some(r#"printf "\033]7;file://%s%s\a" "$HOSTNAME" "$PWD""#.to_string())
+}
+
+/// Generates the OSC 7 reporting snippet for the detected shell.
+///
+/// Returns a command prefix that sets up OSC 7 reporting, or `None` for
+/// fish (native support) or when no injection is needed.
+///
+/// For bash/other: sets `PROMPT_COMMAND` as an env var prefix.
+/// For zsh: returns a precmd hook setup with clear.
+pub(crate) fn osc7_injection_snippet(command: &str) -> Option<String> {
+    let prompt_cmd = osc7_prompt_command()?;
+    match detect_shell(command) {
+        Shell::Bash | Shell::Other => Some(format!("PROMPT_COMMAND='{}'", prompt_cmd)),
+        Shell::Zsh => Some(
+            r#"precmd(){printf '\033]7;file://%s%s\a' "$HOST" "$PWD"};precmd;clear"#.to_string(),
+        ),
+        Shell::Fish => None,
     }
 }
 
@@ -484,6 +562,7 @@ mod tests {
     fn test_pwd_detection_disabled_noop() {
         let config = PwdDetectionConfig {
             enabled: false,
+            inject: false,
             buffer_size: 2048,
         };
         let detection = PwdDetection::new(config);
@@ -496,6 +575,7 @@ mod tests {
     fn test_pwd_detection_enabled() {
         let config = PwdDetectionConfig {
             enabled: true,
+            inject: false,
             buffer_size: 2048,
         };
         let detection = PwdDetection::new(config);
@@ -508,6 +588,7 @@ mod tests {
     fn test_pwd_detection_deduplicates() {
         let config = PwdDetectionConfig {
             enabled: true,
+            inject: false,
             buffer_size: 2048,
         };
         let detection = PwdDetection::new(config);
@@ -612,5 +693,128 @@ mod tests {
 
         let pwd = watcher.changed().await;
         assert_eq!(pwd, None);
+    }
+
+    #[test]
+    fn test_parser_osc9_9_bel_terminated() {
+        let mut parser = OscParser::new(2048);
+
+        let paths = parser.feed(b"\x1b]9;9;/home/user\x07");
+        assert_eq!(paths, vec!["/home/user"]);
+    }
+
+    #[test]
+    fn test_parser_osc9_9_st_terminated() {
+        let mut parser = OscParser::new(2048);
+
+        let paths = parser.feed(b"\x1b]9;9;/home/user\x1b\\");
+        assert_eq!(paths, vec!["/home/user"]);
+    }
+
+    #[test]
+    fn test_parser_osc9_9_percent_encoded() {
+        let mut parser = OscParser::new(2048);
+
+        let paths = parser.feed(b"\x1b]9;9;/home/user/my%20project\x07");
+        assert_eq!(paths, vec!["/home/user/my project"]);
+    }
+
+    #[test]
+    fn test_parser_osc1337_bel_terminated() {
+        let mut parser = OscParser::new(2048);
+
+        let paths = parser.feed(b"\x1b]1337;CurrentDir=/home/user\x07");
+        assert_eq!(paths, vec!["/home/user"]);
+    }
+
+    #[test]
+    fn test_parser_osc1337_st_terminated() {
+        let mut parser = OscParser::new(2048);
+
+        let paths = parser.feed(b"\x1b]1337;CurrentDir=/home/user\x1b\\");
+        assert_eq!(paths, vec!["/home/user"]);
+    }
+
+    #[test]
+    fn test_parser_osc1337_percent_encoded() {
+        let mut parser = OscParser::new(2048);
+
+        let paths = parser.feed(b"\x1b]1337;CurrentDir=/tmp/%E2%9C%93\x07");
+        assert_eq!(paths, vec!["/tmp/\u{2713}"]);
+    }
+
+    #[test]
+    fn test_detect_shell_bash() {
+        assert_eq!(detect_shell("bash"), Shell::Bash);
+        assert_eq!(detect_shell("/bin/bash"), Shell::Bash);
+        assert_eq!(detect_shell("-bash"), Shell::Bash);
+        assert_eq!(detect_shell("/usr/bin/bash"), Shell::Bash);
+        assert_eq!(detect_shell("bash -l"), Shell::Bash);
+        assert_eq!(detect_shell("bash --login"), Shell::Bash);
+    }
+
+    #[test]
+    fn test_detect_shell_zsh() {
+        assert_eq!(detect_shell("zsh"), Shell::Zsh);
+        assert_eq!(detect_shell("/bin/zsh"), Shell::Zsh);
+        assert_eq!(detect_shell("-zsh"), Shell::Zsh);
+        assert_eq!(detect_shell("zsh -l"), Shell::Zsh);
+        assert_eq!(detect_shell("/usr/bin/zsh -l"), Shell::Zsh);
+        assert_eq!(detect_shell("'zsh'"), Shell::Zsh);
+        assert_eq!(detect_shell("\"zsh\""), Shell::Zsh);
+    }
+
+    #[test]
+    fn test_detect_shell_fish() {
+        assert_eq!(detect_shell("fish"), Shell::Fish);
+        assert_eq!(detect_shell("/usr/bin/fish"), Shell::Fish);
+    }
+
+    #[test]
+    fn test_detect_shell_other() {
+        assert_eq!(detect_shell("sh"), Shell::Other);
+        assert_eq!(detect_shell("/bin/sh"), Shell::Other);
+        assert_eq!(detect_shell("dash"), Shell::Other);
+        assert_eq!(detect_shell("ksh"), Shell::Other);
+        assert_eq!(detect_shell("python"), Shell::Other);
+    }
+
+    #[test]
+    fn test_osc7_prompt_command() {
+        let cmd = osc7_prompt_command();
+        assert!(cmd.is_some());
+        let cmd = cmd.unwrap();
+        assert!(cmd.contains("HOSTNAME"));
+        assert!(cmd.contains("PWD"));
+    }
+
+    #[test]
+    fn test_osc7_injection_snippet_bash() {
+        let snippet = osc7_injection_snippet("bash");
+        assert!(snippet.is_some());
+        let snippet = snippet.unwrap();
+        assert!(snippet.starts_with("PROMPT_COMMAND="));
+    }
+
+    #[test]
+    fn test_osc7_injection_snippet_zsh() {
+        let snippet = osc7_injection_snippet("zsh");
+        assert!(snippet.is_some());
+        let snippet = snippet.unwrap();
+        assert!(snippet.contains("precmd"));
+    }
+
+    #[test]
+    fn test_osc7_injection_snippet_fish() {
+        let snippet = osc7_injection_snippet("fish");
+        assert!(snippet.is_none());
+    }
+
+    #[test]
+    fn test_osc7_injection_snippet_other() {
+        let snippet = osc7_injection_snippet("sh");
+        assert!(snippet.is_some());
+        let snippet = snippet.unwrap();
+        assert!(snippet.starts_with("PROMPT_COMMAND="));
     }
 }
