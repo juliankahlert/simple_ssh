@@ -22,6 +22,7 @@
  * SOFTWARE.
  */
 
+use anyhow::Result;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Instant;
@@ -292,15 +293,15 @@ impl PwdDetection {
     }
 
     /// Creates a new watcher for observing PWD changes.
-    pub(crate) fn create_watcher(&self) -> PwdWatcher {
-        PwdWatcher {
+    pub(crate) fn create_watcher(&self) -> Result<PwdWatcher> {
+        Ok(PwdWatcher {
             inner: self.event_rx.clone(),
             last_known: self
                 .current_pwd
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .clone(),
-        }
+        })
     }
 }
 
