@@ -89,13 +89,16 @@ use tokio::time::timeout;
 
 use crate::client::Msg;
 use crate::pty_mode::ModeDetection;
+use crate::pty_pwd::PwdDetection;
 
 pub use russh::Pty;
 pub use russh::Sig;
 
 pub mod pty_mode;
+pub mod pty_pwd;
 
 pub use pty_mode::{ModeChangeEvent, ModeDetectionConfig, ModeWatcher, PtyMode};
+pub use pty_pwd::{PwdChangeEvent, PwdDetectionConfig, PwdWatcher};
 
 /// Type alias for the previous panic hook handler.
 type PanicHook = Box<dyn Fn(&panic::PanicHookInfo<'_>) + Send + Sync>;
@@ -208,6 +211,7 @@ pub struct PtyHandle {
     exit_rx: watch::Receiver<Option<PtyExitStatus>>,
     closed: bool,
     mode_detection: Option<Arc<ModeDetection>>,
+    pwd_detection: Option<Arc<PwdDetection>>,
 }
 
 impl std::fmt::Debug for PtyHandle {
@@ -315,6 +319,24 @@ impl PtyHandle {
             .as_ref()
             .map(|md: &Arc<ModeDetection>| md.create_watcher())
     }
+
+    /// Returns the current working directory if PWD detection is enabled
+    /// and a directory has been reported via OSC 7 or OSC 633.
+    pub fn current_pwd(&self) -> Option<String> {
+        self.pwd_detection
+            .as_ref()
+            .and_then(|pd: &Arc<PwdDetection>| pd.current_pwd())
+    }
+
+    /// Creates a watcher for PWD change events.
+    ///
+    /// Returns a `PwdWatcher` that can be used to await directory changes.
+    /// Returns `None` if PWD detection is not enabled.
+    pub fn watch_pwd(&self) -> Option<PwdWatcher> {
+        self.pwd_detection
+            .as_ref()
+            .map(|pd: &Arc<PwdDetection>| pd.create_watcher())
+    }
 }
 
 impl Drop for PtyHandle {
@@ -363,6 +385,7 @@ async fn pty_io_task(
     mut resize_rx: mpsc::Receiver<(u32, u32)>,
     exit_tx: watch::Sender<Option<PtyExitStatus>>,
     mode_detection: Option<Arc<ModeDetection>>,
+    pwd_detection: Option<Arc<PwdDetection>>,
 ) -> Result<PtyExitStatus> {
     let status = loop {
         tokio::select! {
@@ -382,6 +405,9 @@ async fn pty_io_task(
                     Some(ChannelMsg::Data { ref data }) => {
                         if let Some(md) = mode_detection.as_ref() {
                             md.feed(data);
+                        }
+                        if let Some(pd) = pwd_detection.as_ref() {
+                            pd.feed(data);
                         }
                         // If the receiver is dropped, we still continue
                         // to process channel messages for exit status
@@ -415,7 +441,13 @@ async fn pty_io_task(
     };
 
     // Drain remaining output after exit status
-    drain_remaining_output(&mut channel, &output_tx, mode_detection.as_deref()).await;
+    drain_remaining_output(
+        &mut channel,
+        &output_tx,
+        mode_detection.as_deref(),
+        pwd_detection.as_deref(),
+    )
+    .await;
 
     let _ = exit_tx.send(Some(status.clone()));
     Ok(status)
@@ -429,6 +461,7 @@ async fn drain_remaining_output(
     channel: &mut Channel<Msg>,
     output_tx: &mpsc::Sender<Vec<u8>>,
     mode_detection: Option<&ModeDetection>,
+    pwd_detection: Option<&PwdDetection>,
 ) {
     loop {
         tokio::select! {
@@ -437,6 +470,9 @@ async fn drain_remaining_output(
                     Some(ChannelMsg::Data { ref data }) => {
                         if let Some(md) = mode_detection {
                             md.feed(data);
+                        }
+                        if let Some(pd) = pwd_detection {
+                            pd.feed(data);
                         }
                         let _ = output_tx.send(data.to_vec()).await;
                     }
@@ -581,6 +617,7 @@ impl<'sb> Session {
             auto_resize: false,
             terminal_modes: None,
             mode_detection_config: None,
+            pwd_detection_config: None,
         }
     }
 
@@ -703,6 +740,7 @@ pub struct PtyBuilder<'a> {
     auto_resize: bool,
     terminal_modes: Option<Vec<(Pty, u32)>>,
     mode_detection_config: Option<pty_mode::ModeDetectionConfig>,
+    pwd_detection_config: Option<pty_pwd::PwdDetectionConfig>,
 }
 
 impl<'a> PtyBuilder<'a> {
@@ -796,6 +834,30 @@ impl<'a> PtyBuilder<'a> {
         self
     }
 
+    /// Enables PWD (working directory) detection with default config.
+    ///
+    /// This enables detection of the remote shell's working directory
+    /// via OSC 7 and OSC 633 escape sequences. The remote shell must
+    /// emit these sequences — fish does this by default, while bash
+    /// and zsh require configuration.
+    pub fn with_pwd_detection(mut self) -> Self {
+        self.pwd_detection_config = Some(pty_pwd::PwdDetectionConfig {
+            enabled: true,
+            ..pty_pwd::PwdDetectionConfig::default()
+        });
+        self
+    }
+
+    /// Enables PWD detection with custom config.
+    ///
+    /// This enables detection of the remote shell's working directory
+    /// with custom configuration options.
+    pub fn with_pwd_detection_config(mut self, mut config: pty_pwd::PwdDetectionConfig) -> Self {
+        config.enabled = true;
+        self.pwd_detection_config = Some(config);
+        self
+    }
+
     /// Opens a programmatic PTY session and returns a [`PtyHandle`].
     ///
     /// Unlike [`run()`](PtyBuilder::run), this does not manage stdin/stdout,
@@ -838,6 +900,10 @@ impl<'a> PtyBuilder<'a> {
             .mode_detection_config
             .map(|config| Arc::new(ModeDetection::new(config)));
 
+        let pwd_detection: Option<Arc<PwdDetection>> = self
+            .pwd_detection_config
+            .map(|config| Arc::new(PwdDetection::new(config)));
+
         let task_handle = tokio::spawn(pty_io_task(
             channel,
             input_rx,
@@ -845,6 +911,7 @@ impl<'a> PtyBuilder<'a> {
             resize_rx,
             exit_tx,
             mode_detection.clone(),
+            pwd_detection.clone(),
         ));
 
         Ok(PtyHandle {
@@ -855,6 +922,7 @@ impl<'a> PtyBuilder<'a> {
             exit_rx,
             closed: false,
             mode_detection,
+            pwd_detection,
         })
     }
 
@@ -3220,6 +3288,7 @@ async fn test_pty_handle_mode_detection_disabled_returns_none() {
         exit_rx,
         closed: false,
         mode_detection,
+        pwd_detection: None,
     };
 
     assert!(handle.current_mode().is_none());
@@ -3247,6 +3316,7 @@ async fn test_pty_handle_mode_detection_enabled_shared_instance() {
         exit_rx,
         closed: false,
         mode_detection: Some(mode_detection.clone()),
+        pwd_detection: None,
     };
 
     let handle_mode_detection = handle.mode_detection.clone();
@@ -3255,4 +3325,103 @@ async fn test_pty_handle_mode_detection_enabled_shared_instance() {
     assert!(!handle.is_alt_mode());
     assert!(handle.is_std_mode());
     assert_eq!(mode_detection.current_mode(), PtyMode::Standard);
+}
+
+#[test]
+fn test_pty_builder_with_pwd_detection_default_config() {
+    let session = Session::init()
+        .with_host("localhost")
+        .with_user("user")
+        .with_passwd("pass")
+        .build()
+        .unwrap();
+
+    let mut session_mut = session;
+    let builder = session_mut.pty_builder().with_pwd_detection();
+
+    assert!(builder.pwd_detection_config.is_some());
+}
+
+#[test]
+fn test_pty_builder_with_pwd_detection_custom_config() {
+    let session = Session::init()
+        .with_host("localhost")
+        .with_user("user")
+        .with_passwd("pass")
+        .build()
+        .unwrap();
+
+    let mut session_mut = session;
+    let config = pty_pwd::PwdDetectionConfig::default();
+    let builder = session_mut.pty_builder().with_pwd_detection_config(config);
+
+    assert!(builder.pwd_detection_config.is_some());
+}
+
+#[test]
+fn test_pty_builder_pwd_detection_disabled_by_default() {
+    let session = Session::init()
+        .with_host("localhost")
+        .with_user("user")
+        .with_passwd("pass")
+        .build()
+        .unwrap();
+
+    let mut session_mut = session;
+    let builder = session_mut.pty_builder();
+
+    assert!(builder.pwd_detection_config.is_none());
+}
+
+#[tokio::test]
+async fn test_pty_handle_pwd_detection_disabled_returns_none() {
+    let (input_tx, _input_rx) = mpsc::channel(64);
+    let (_output_tx, output_rx) = mpsc::channel(256);
+    let (resize_tx, _resize_rx) = mpsc::channel(4);
+    let (_exit_tx, exit_rx) = watch::channel(None);
+
+    let handle = PtyHandle {
+        input_tx,
+        output_rx,
+        resize_tx,
+        task_handle: None,
+        exit_rx,
+        closed: false,
+        mode_detection: None,
+        pwd_detection: None,
+    };
+
+    assert!(handle.current_pwd().is_none());
+    assert!(handle.watch_pwd().is_none());
+}
+
+#[tokio::test]
+async fn test_pty_handle_pwd_detection_enabled_shared_instance() {
+    let config = PwdDetectionConfig {
+        enabled: true,
+        buffer_size: 2048,
+    };
+    let pwd_detection = Arc::new(PwdDetection::new(config));
+
+    let (input_tx, _input_rx) = mpsc::channel(64);
+    let (_output_tx, output_rx) = mpsc::channel(256);
+    let (resize_tx, _resize_rx) = mpsc::channel(4);
+    let (_exit_tx, exit_rx) = watch::channel(None);
+
+    let handle = PtyHandle {
+        input_tx,
+        output_rx,
+        resize_tx,
+        task_handle: None,
+        exit_rx,
+        closed: false,
+        mode_detection: None,
+        pwd_detection: Some(pwd_detection.clone()),
+    };
+
+    assert!(handle.current_pwd().is_none());
+    assert!(handle.watch_pwd().is_some());
+
+    pwd_detection.feed(b"\x1b]7;file://host/home/user\x07");
+    assert_eq!(handle.current_pwd(), Some("/home/user".to_string()));
 }
