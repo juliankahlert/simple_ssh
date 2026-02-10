@@ -94,9 +94,11 @@ use crate::pty_pwd::PwdDetection;
 pub use russh::Pty;
 pub use russh::Sig;
 
+pub mod pty_history;
 pub mod pty_mode;
 pub mod pty_pwd;
 
+pub use pty_history::{HistoryEntry, HistoryWatcher, PtyHistoryConfig};
 pub use pty_mode::{ModeChangeEvent, ModeDetectionConfig, ModeWatcher, PtyMode};
 pub use pty_pwd::{PwdChangeEvent, PwdDetectionConfig, PwdWatcher};
 
@@ -209,6 +211,7 @@ pub struct PtyHandle {
     closed: bool,
     mode_detection: Option<Arc<ModeDetection>>,
     pwd_detection: Option<Arc<PwdDetection>>,
+    history: Option<Arc<pty_history::PtyHistory>>,
 }
 
 impl std::fmt::Debug for PtyHandle {
@@ -343,6 +346,35 @@ impl PtyHandle {
             None => Err(anyhow!("PWD detection is not enabled")),
         }
     }
+
+    /// Returns the number of history entries if history capture is enabled.
+    pub fn history_len(&self) -> usize {
+        self.history.as_ref().map(|h| h.len()).unwrap_or(0)
+    }
+
+    /// Creates a watcher for history changes.
+    ///
+    /// Returns a `HistoryWatcher` that can be used to await new entries.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if history capture is not enabled.
+    pub fn watch_history(&self) -> Result<HistoryWatcher> {
+        match self.history.as_ref() {
+            Some(h) => Ok(h.create_watcher()),
+            None => Err(anyhow!("history capture is not enabled")),
+        }
+    }
+
+    /// Returns all history entries as a Vec.
+    ///
+    /// Returns an empty Vec if history capture is not enabled.
+    pub fn history_entries(&self) -> Vec<HistoryEntry> {
+        match self.history.as_ref() {
+            Some(h) => h.iter().collect(),
+            None => Vec::new(),
+        }
+    }
 }
 
 impl Drop for PtyHandle {
@@ -384,6 +416,7 @@ fn default_pty_terminal_modes() -> Vec<(Pty, u32)> {
 ///
 /// Handles input forwarding, output collection, resize events, and
 /// exit status detection without any terminal or signal management.
+#[allow(clippy::too_many_arguments)]
 async fn pty_io_task(
     mut channel: Channel<Msg>,
     mut input_rx: mpsc::Receiver<Vec<u8>>,
@@ -392,6 +425,7 @@ async fn pty_io_task(
     exit_tx: watch::Sender<Option<PtyExitStatus>>,
     mode_detection: Option<Arc<ModeDetection>>,
     pwd_detection: Option<Arc<PwdDetection>>,
+    history: Option<Arc<pty_history::PtyHistory>>,
 ) -> Result<PtyExitStatus> {
     let status = loop {
         tokio::select! {
@@ -414,6 +448,9 @@ async fn pty_io_task(
                         }
                         if let Some(pd) = pwd_detection.as_ref() {
                             pd.feed(data);
+                        }
+                        if let Some(h) = history.as_ref() {
+                            h.feed(data);
                         }
                         // If the receiver is dropped, we still continue
                         // to process channel messages for exit status
@@ -452,6 +489,7 @@ async fn pty_io_task(
         &output_tx,
         mode_detection.as_deref(),
         pwd_detection.as_deref(),
+        history.as_deref(),
     )
     .await;
 
@@ -468,6 +506,7 @@ async fn drain_remaining_output(
     output_tx: &mpsc::Sender<Vec<u8>>,
     mode_detection: Option<&ModeDetection>,
     pwd_detection: Option<&PwdDetection>,
+    history: Option<&pty_history::PtyHistory>,
 ) {
     loop {
         tokio::select! {
@@ -479,6 +518,9 @@ async fn drain_remaining_output(
                         }
                         if let Some(pd) = pwd_detection {
                             pd.feed(data);
+                        }
+                        if let Some(h) = history {
+                            h.feed(data);
                         }
                         let _ = output_tx.send(data.to_vec()).await;
                     }
@@ -624,6 +666,7 @@ impl<'sb> Session {
             terminal_modes: None,
             mode_detection_config: None,
             pwd_detection_config: None,
+            history_config: None,
         }
     }
 
@@ -747,6 +790,7 @@ pub struct PtyBuilder<'a> {
     terminal_modes: Option<Vec<(Pty, u32)>>,
     mode_detection_config: Option<pty_mode::ModeDetectionConfig>,
     pwd_detection_config: Option<pty_pwd::PwdDetectionConfig>,
+    history_config: Option<pty_history::PtyHistoryConfig>,
 }
 
 impl<'a> PtyBuilder<'a> {
@@ -867,6 +911,40 @@ impl<'a> PtyBuilder<'a> {
         self
     }
 
+    /// Enables PTY history capture with custom configuration.
+    ///
+    /// Captures terminal output as scrollable history with configurable
+    /// line and memory limits. History entries have ANSI escape sequences
+    /// stripped for easy reading.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let handle = session.pty_builder()
+    ///     .with_history(
+    ///         PtyHistoryConfig::new()
+    ///             .lines(1000)
+    ///             .memory("10MiB")
+    ///     )
+    ///     .open()
+    ///     .await?;
+    ///
+    /// // Watch for new entries
+    /// let mut watcher = handle.watch_history()?;
+    /// while let Some(count) = watcher.wait_for_new().await {
+    ///     println!("History now has {} entries", count);
+    /// }
+    ///
+    /// // Access all entries
+    /// for entry in handle.history_entries() {
+    ///     println!("{}", entry.content);
+    /// }
+    /// ```
+    pub fn with_history(mut self, config: PtyHistoryConfig) -> Self {
+        self.history_config = Some(config);
+        self
+    }
+
     /// Opens a programmatic PTY session and returns a [`PtyHandle`].
     ///
     /// Unlike [`run()`](PtyBuilder::run), this does not manage stdin/stdout,
@@ -944,6 +1022,11 @@ impl<'a> PtyBuilder<'a> {
             .pwd_detection_config
             .map(|config| Arc::new(PwdDetection::new(config)));
 
+        let history: Option<Arc<pty_history::PtyHistory>> = self
+            .history_config
+            .filter(|c| c.enabled)
+            .map(|config| Arc::new(pty_history::PtyHistory::new(config)));
+
         let task_handle = tokio::spawn(pty_io_task(
             channel,
             input_rx,
@@ -952,6 +1035,7 @@ impl<'a> PtyBuilder<'a> {
             exit_tx,
             mode_detection.clone(),
             pwd_detection.clone(),
+            history.clone(),
         ));
 
         Ok(PtyHandle {
@@ -963,6 +1047,7 @@ impl<'a> PtyBuilder<'a> {
             closed: false,
             mode_detection,
             pwd_detection,
+            history,
         })
     }
 
@@ -3329,6 +3414,7 @@ async fn test_pty_handle_mode_detection_disabled_returns_none() {
         closed: false,
         mode_detection,
         pwd_detection: None,
+        history: None,
     };
 
     assert!(handle.current_mode().is_none());
@@ -3357,6 +3443,7 @@ async fn test_pty_handle_mode_detection_enabled_shared_instance() {
         closed: false,
         mode_detection: Some(mode_detection.clone()),
         pwd_detection: None,
+        history: None,
     };
 
     let handle_mode_detection = handle.mode_detection.clone();
@@ -3450,6 +3537,7 @@ async fn test_pty_handle_pwd_detection_disabled_returns_none() {
         closed: false,
         mode_detection: None,
         pwd_detection: None,
+        history: None,
     };
 
     assert!(handle.current_pwd().is_none());
@@ -3479,6 +3567,7 @@ async fn test_pty_handle_pwd_detection_enabled_shared_instance() {
         closed: false,
         mode_detection: None,
         pwd_detection: Some(pwd_detection.clone()),
+        history: None,
     };
 
     assert!(handle.current_pwd().is_none());
