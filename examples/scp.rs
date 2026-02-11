@@ -39,9 +39,12 @@ mod example_tests {
     fn test_scp_example_with_key() {
         let cli = Cli::parse_from([
             "scp",
-            "--host", "example.com",
-            "--user", "admin",
-            "--key", "/path/to/key"
+            "--host",
+            "example.com",
+            "--user",
+            "admin",
+            "--key",
+            "/path/to/key",
         ]);
         assert!(cli.host.is_some());
         assert!(cli.user.is_some());
@@ -50,11 +53,7 @@ mod example_tests {
 
     #[test]
     fn test_scp_example_with_port() {
-        let cli = Cli::parse_from([
-            "scp",
-            "--host", "example.com",
-            "--port", "3333"
-        ]);
+        let cli = Cli::parse_from(["scp", "--host", "example.com", "--port", "3333"]);
         assert_eq!(cli.port, Some(3333));
     }
 }

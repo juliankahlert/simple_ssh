@@ -46,9 +46,12 @@ mod example_tests {
     fn test_basic_example_with_all_auth() {
         let cli = Cli::parse_from([
             "basic",
-            "--host", "example.com",
-            "--user", "admin",
-            "--passwd", "secret"
+            "--host",
+            "example.com",
+            "--user",
+            "admin",
+            "--passwd",
+            "secret",
         ]);
         assert!(cli.host.is_some());
         assert!(cli.user.is_some());

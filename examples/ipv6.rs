@@ -6,7 +6,10 @@ use cli::Cli;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let args = Cli::with("host")?.and("scope")?.and("user")?.and("passwd")?;
+    let args = Cli::with("host")?
+        .and("scope")?
+        .and("user")?
+        .and("passwd")?;
 
     let host = args.host.expect("host is required");
     let user = args.user.expect("user is required");
@@ -45,11 +48,7 @@ mod example_tests {
 
     #[test]
     fn test_ipv6_example_with_scope() {
-        let cli = Cli::parse_from([
-            "ipv6",
-            "--host", "fe80::1%eth0",
-            "--scope", "eth0"
-        ]);
+        let cli = Cli::parse_from(["ipv6", "--host", "fe80::1%eth0", "--scope", "eth0"]);
         assert!(cli.host.is_some());
         assert!(cli.scope.is_some());
     }
@@ -57,10 +56,7 @@ mod example_tests {
     #[test]
     fn test_ipv6_example_link_local() {
         let cli = Cli::parse_from([
-            "ipv6",
-            "--host", "fe80::1",
-            "--scope", "en0",
-            "--user", "admin"
+            "ipv6", "--host", "fe80::1", "--scope", "en0", "--user", "admin",
         ]);
         assert!(cli.scope.is_some());
         assert!(cli.user.is_some());

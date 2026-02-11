@@ -46,9 +46,12 @@ mod example_tests {
     fn test_pty_example_with_key() {
         let cli = Cli::parse_from([
             "pty",
-            "--host", "example.com",
-            "--user", "admin",
-            "--key", "/path/to/key"
+            "--host",
+            "example.com",
+            "--user",
+            "admin",
+            "--key",
+            "/path/to/key",
         ]);
         assert!(cli.host.is_some());
         assert!(cli.user.is_some());
@@ -57,11 +60,7 @@ mod example_tests {
 
     #[test]
     fn test_pty_example_with_timeout() {
-        let cli = Cli::parse_from([
-            "pty",
-            "--host", "example.com",
-            "--timeout", "30"
-        ]);
+        let cli = Cli::parse_from(["pty", "--host", "example.com", "--timeout", "30"]);
         assert_eq!(cli.timeout, Some(30));
     }
 }
