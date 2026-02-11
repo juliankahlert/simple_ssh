@@ -58,5 +58,8 @@ name = "simple-scp"
 path = "src/bin/simple-scp.rs"
 required-features = ["cli"]
 
+[dev-dependencies]
+clap = { version = "4", features = ["derive"] }
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
