@@ -98,6 +98,7 @@ pub mod pty_history;
 pub mod pty_mode;
 pub mod pty_pwd;
 
+#[cfg(test)]
 mod ipv6_tests;
 
 pub use pty_history::{HistoryEntry, HistoryWatcher, PtyHistoryConfig};
@@ -549,7 +550,11 @@ async fn drain_remaining_output(
 /// # Returns
 ///
 /// A [`SocketAddr`] or an error if resolution fails.
-fn resolve_socket_addr(host: &str, port: u16, scope: Option<&str>) -> Result<SocketAddr> {
+pub(crate) fn resolve_socket_addr(
+    host: &str,
+    port: u16,
+    scope: Option<&str>,
+) -> Result<SocketAddr> {
     let host_with_scope = if let Some(scope_id) = scope {
         format!("{}%{}", host, scope_id)
     } else {
