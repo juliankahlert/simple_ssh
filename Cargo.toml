@@ -47,6 +47,27 @@ parking_lot = "0.12"
 [features]
 default = []
 cli = ["dep:clap", "dep:futures", "dep:vt100"]
+examples = ["dep:clap"]
+
+[[example]]
+name = "basic"
+path = "examples/basic.rs"
+required-features = ["examples"]
+
+[[example]]
+name = "scp"
+path = "examples/scp.rs"
+required-features = ["examples"]
+
+[[example]]
+name = "pty"
+path = "examples/pty.rs"
+required-features = ["examples"]
+
+[[example]]
+name = "ipv6"
+path = "examples/ipv6.rs"
+required-features = ["examples"]
 
 [[bin]]
 name = "simple-ssh"
