@@ -23,3 +23,38 @@ async fn main() -> Result<()> {
     ssh.close().await?;
     Ok(())
 }
+
+#[cfg(test)]
+mod example_tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn test_scp_example_compiles() {
+        let cli = Cli::parse_from(["scp", "--host", "example.com"]);
+        assert_eq!(cli.host, Some("example.com".to_string()));
+    }
+
+    #[test]
+    fn test_scp_example_with_key() {
+        let cli = Cli::parse_from([
+            "scp",
+            "--host", "example.com",
+            "--user", "admin",
+            "--key", "/path/to/key"
+        ]);
+        assert!(cli.host.is_some());
+        assert!(cli.user.is_some());
+        assert!(cli.key.is_some());
+    }
+
+    #[test]
+    fn test_scp_example_with_port() {
+        let cli = Cli::parse_from([
+            "scp",
+            "--host", "example.com",
+            "--port", "3333"
+        ]);
+        assert_eq!(cli.port, Some(3333));
+    }
+}

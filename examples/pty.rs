@@ -30,3 +30,38 @@ async fn main() -> Result<()> {
     ssh.close().await?;
     Ok(())
 }
+
+#[cfg(test)]
+mod example_tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn test_pty_example_compiles() {
+        let cli = Cli::parse_from(["pty", "--host", "example.com"]);
+        assert_eq!(cli.host, Some("example.com".to_string()));
+    }
+
+    #[test]
+    fn test_pty_example_with_key() {
+        let cli = Cli::parse_from([
+            "pty",
+            "--host", "example.com",
+            "--user", "admin",
+            "--key", "/path/to/key"
+        ]);
+        assert!(cli.host.is_some());
+        assert!(cli.user.is_some());
+        assert!(cli.key.is_some());
+    }
+
+    #[test]
+    fn test_pty_example_with_timeout() {
+        let cli = Cli::parse_from([
+            "pty",
+            "--host", "example.com",
+            "--timeout", "30"
+        ]);
+        assert_eq!(cli.timeout, Some(30));
+    }
+}

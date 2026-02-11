@@ -31,3 +31,38 @@ async fn main() -> Result<()> {
     ssh.close().await?;
     Ok(())
 }
+
+#[cfg(test)]
+mod example_tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn test_ipv6_example_compiles() {
+        let cli = Cli::parse_from(["ipv6", "--host", "example.com"]);
+        assert_eq!(cli.host, Some("example.com".to_string()));
+    }
+
+    #[test]
+    fn test_ipv6_example_with_scope() {
+        let cli = Cli::parse_from([
+            "ipv6",
+            "--host", "fe80::1%eth0",
+            "--scope", "eth0"
+        ]);
+        assert!(cli.host.is_some());
+        assert!(cli.scope.is_some());
+    }
+
+    #[test]
+    fn test_ipv6_example_link_local() {
+        let cli = Cli::parse_from([
+            "ipv6",
+            "--host", "fe80::1",
+            "--scope", "en0",
+            "--user", "admin"
+        ]);
+        assert!(cli.scope.is_some());
+        assert!(cli.user.is_some());
+    }
+}
