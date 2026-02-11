@@ -98,6 +98,8 @@ pub mod pty_history;
 pub mod pty_mode;
 pub mod pty_pwd;
 
+mod ipv6_tests;
+
 pub use pty_history::{HistoryEntry, HistoryWatcher, PtyHistoryConfig};
 pub use pty_mode::{ModeChangeEvent, ModeDetectionConfig, ModeWatcher, PtyMode};
 pub use pty_pwd::{PwdChangeEvent, PwdDetectionConfig, PwdWatcher};

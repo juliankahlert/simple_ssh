@@ -24,6 +24,9 @@ pub struct Cli {
 
     #[arg(long)]
     pub timeout: Option<u64>,
+
+    #[arg(long)]
+    pub scope: Option<String>,
 }
 
 impl Cli {
@@ -76,6 +79,12 @@ impl Cli {
                 }
                 self.timeout = Some(prompt("timeout")?.parse()?);
             }
+            "scope" => {
+                if self.scope.is_some() {
+                    return Err(anyhow!("scope already set"));
+                }
+                self.scope = Some(prompt("scope")?);
+            }
             _ => return Err(anyhow!("unknown field: {}", field)),
         }
         Ok(self)
@@ -125,6 +134,14 @@ mod tests {
         assert!(cli.key.is_none());
         assert!(cli.command.is_none());
         assert!(cli.timeout.is_none());
+        assert!(cli.scope.is_none());
+    }
+
+    #[test]
+    fn test_cli_and_scope() {
+        let cli = Cli::with("host").unwrap().and("scope").unwrap();
+        assert!(cli.host.is_some());
+        assert!(cli.scope.is_some());
     }
 }
 
