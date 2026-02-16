@@ -5,7 +5,7 @@ export interface Token {
 
 // Keywords, types, and other token categories
 const KEYWORDS = ['use', 'async', 'fn', 'let', 'mut', 'return', 'if', 'else', 'match', 'struct', 'enum', 'impl', 'pub', 'crate', 'mod', 'self', 'await'];
-const TYPES = ['Session', 'Result', 'Option', 'String', 'Vec', 'HashMap', 'Box', 'Arc', 'Mutex', 'RwLock', 'Ok', 'Cli'];
+const TYPES = ['Session', 'Result', 'Option', 'String', 'Vec', 'HashMap', 'Box', 'Arc', 'Mutex', 'RwLock', 'Ok', 'Cli', 'Error'];
 
 export function classifyWord(word: string): string {
   if (KEYWORDS.includes(word)) return 'keyword';
@@ -111,7 +111,9 @@ export function tokenizeRust(line: string): Token[] {
         
         // Special case: word!(...) is a macro (function-like)
         if (nextChar === '!' && afterNext.startsWith('(')) {
-          tokens.push({ type: 'func', content: word });
+          tokens.push({ type: 'macro', content: word + '!' });
+          remaining = remaining.slice(word.length + 1);
+          continue;
         } else if (nextChar === '(') {
           // Ok is a type even when followed by (
           if (word === 'Ok') {
