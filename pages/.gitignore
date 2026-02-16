@@ -45,3 +45,7 @@ coverage
 
 scripts/public/examples
 public/examples/
+public/fonts/
+
+# Generated
+src/composables/examplesData.ts

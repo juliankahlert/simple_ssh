@@ -15,10 +15,9 @@ describe('Global Styles', () => {
     expect(mainTs).toContain("import './styles/global.scss'")
   })
 
-  it('Google Fonts load (Space Grotesk, JetBrains Mono)', () => {
-    expect(globalScss).toContain('Space+Grotesk')
-    expect(globalScss).toContain('JetBrains+Mono')
-    expect(globalScss).toContain('fonts.googleapis')
+  it('Local fonts load (Space Grotesk, JetBrains Mono)', () => {
+    expect(globalScss).toContain('fonts.css')
+    expect(globalScss).toContain('/fonts/')
   })
 
   it('Global CSS reset applied', () => {

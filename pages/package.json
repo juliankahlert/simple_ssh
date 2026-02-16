@@ -4,7 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "download-fonts": "tsx scripts/download-fonts.ts",
     "copy-examples": "tsx scripts/copy-examples.ts",
+    "postinstall": "npm run download-fonts",
     "prebuild": "npm run copy-examples",
     "predev": "npm run copy-examples",
     "pretest": "npm run copy-examples",
