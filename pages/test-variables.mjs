@@ -25,10 +25,11 @@ const files = readdirSync(srcPath, { recursive: true });
 const varUsageRegex = /var\(--([\w-]+)\)/g;
 let match;
 
-for (const file of files) {
+const scssFiles = files.filter(file => file.endsWith('.scss'));
+for (const file of scssFiles) {
     varUsageRegex.lastIndex = 0;
     const filePath = path.join(srcPath, file);
-    if (statSync(filePath).isFile() && filePath.endsWith('.scss')) {
+    if (statSync(filePath).isFile()) {
         const content = readFileSync(filePath, 'utf-8');
         while ((match = varUsageRegex.exec(content)) !== null) {
             const name = '--' + match[1];
