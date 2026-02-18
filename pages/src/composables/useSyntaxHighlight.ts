@@ -4,8 +4,8 @@ export interface Token {
 }
 
 // Keywords, types, and other token categories
-const KEYWORDS = ['use', 'async', 'fn', 'let', 'mut', 'return', 'if', 'else', 'match', 'struct', 'enum', 'impl', 'pub', 'crate', 'mod', 'self', 'await'];
-const TYPES = ['Session', 'Result', 'Option', 'String', 'Vec', 'HashMap', 'Box', 'Arc', 'Mutex', 'RwLock', 'Ok', 'Cli', 'Error'];
+const KEYWORDS = ['use', 'async', 'fn', 'let', 'mut', 'return', 'if', 'else', 'match', 'struct', 'enum', 'impl', 'pub', 'crate', 'mod', 'self', 'await', 'const', 'static', 'type', 'trait', 'where', 'for', 'while', 'loop', 'break', 'continue', 'in', 'true', 'false', 'super'];
+const TYPES = ['Session', 'Result', 'Option', 'String', 'Vec', 'HashMap', 'Box', 'Arc', 'Mutex', 'RwLock', 'Ok', 'Cli', 'Error', 'Self', 'i32', 'u32', 'i64', 'u64', 'usize', 'str', 'bool', 'Some', 'None', 'Err'];
 
 export function classifyWord(word: string): string {
   if (KEYWORDS.includes(word)) return 'keyword';
@@ -37,7 +37,54 @@ export function tokenizeRust(line: string): Token[] {
       continue;
     }
 
-    // Handle string literals
+    if (char === "'") {
+      let closeQuoteIndex = -1;
+      for (let i = 1; i < remaining.length; i++) {
+        if (remaining[i] === '\\') {
+          i++;
+          continue;
+        }
+        if (remaining[i] === "'") {
+          closeQuoteIndex = i;
+          break;
+        }
+      }
+      if (closeQuoteIndex !== -1) {
+        tokens.push({ type: 'char', content: remaining.slice(0, closeQuoteIndex + 1) });
+        remaining = remaining.slice(closeQuoteIndex + 1);
+        continue;
+      }
+      const nextChar = remaining[1];
+      if (nextChar && /[a-zA-Z_]/.test(nextChar)) {
+        tokens.push({ type: 'text', content: "'" });
+        remaining = remaining.slice(1);
+        continue;
+      }
+      tokens.push({ type: 'text', content: "'" });
+      remaining = remaining.slice(1);
+      continue;
+    }
+
+    // Handle raw string literals
+    if (char === 'r') {
+      const rawMatch = remaining.match(/^r(#*)"/);
+      if (rawMatch) {
+        const hashCount = rawMatch[1]?.length ?? 0;
+        let strEnd = rawMatch[0].length;
+        while (strEnd < remaining.length) {
+          if (remaining.charAt(strEnd) === '"' && remaining.slice(strEnd, strEnd + hashCount + 1).match(new RegExp('^"' + '#'.repeat(hashCount)))) {
+            strEnd += hashCount + 1;
+            break;
+          }
+          strEnd++;
+        }
+        tokens.push({ type: 'raw-string', content: remaining.slice(0, strEnd) });
+        remaining = remaining.slice(strEnd);
+        continue;
+      }
+    }
+
+    // Handle string literals (including raw strings)
     if (char === '"') {
       let strEnd = 1;
       let escaped = false;
