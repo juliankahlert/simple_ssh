@@ -1,0 +1,193 @@
+import { copy, ensureDir } from 'fs-extra';
+import { readFile, writeFile } from 'fs/promises';
+import { fileURLToPath } from 'url';
+import path from 'path';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const sourceDir = path.join(__dirname, '../../examples/');
+const targetDir = path.join(__dirname, '../../public/examples/');
+// cli.rs is intentionally excluded because it is a shared module imported via
+// "mod cli;" by other examples rather than a standalone example.
+const filesToCopy = [
+  'basic.rs',
+  'scp.rs',
+  'pty.rs',
+  'ipv6.rs'
+];
+
+function stripTests(content: string): string {
+  const result: string[] = [];
+  let i = 0;
+
+  while (i < content.length) {
+    const remaining = content.slice(i);
+
+    const testModMatch = remaining.match(/^#\[cfg\(test\)\]\s*\n?\s*mod\s+\w+\s*\{/);
+    if (testModMatch) {
+      const start = i;
+      i += testModMatch[0].length;
+      let braceDepth = 1;
+      let inString = false;
+      let stringChar = '';
+      let escaped = false;
+
+      while (i < content.length && braceDepth > 0) {
+        const ch: string = content[i];
+        if (escaped) {
+          escaped = false;
+          i++;
+          continue;
+        }
+        if (ch === '\\') {
+          escaped = true;
+          i++;
+          continue;
+        }
+        if (!inString && ch === 'r') {
+          const remaining = content.slice(i);
+          const rawMatch = remaining.match(/^r(#*)"/);
+          if (rawMatch) {
+            const hashes = rawMatch[1];
+            const closing = `"${hashes}`;
+            i += rawMatch[0].length;
+            while (i < content.length && !content.slice(i).startsWith(closing)) {
+              i++;
+            }
+            if (i < content.length) {
+              i += closing.length;
+            }
+            continue;
+          }
+        }
+        if (!inString && (ch === '"' || ch === '\'')) {
+          inString = true;
+          stringChar = ch;
+        } else if (inString && ch === stringChar) {
+          inString = false;
+        } else if (!inString) {
+          if (ch === '{') braceDepth++;
+          else if (ch === '}') braceDepth--;
+        }
+        i++;
+      }
+      continue;
+    }
+
+    const testFnMatch = remaining.match(/^#\[test\]\s*\n?\s*(?:#\[.*?\]\s*\n?\s*)*fn\s+\w+/);
+    if (testFnMatch) {
+      const fnStart = i;
+      let fnEnd = i + testFnMatch[0].length;
+
+      while (fnEnd < content.length && content[fnEnd] !== '{') fnEnd++;
+      if (content[fnEnd] === '{') {
+        fnEnd++;
+        let braceDepth = 1;
+        let inString = false;
+        let stringChar = '';
+        let escaped = false;
+
+        while (fnEnd < content.length && braceDepth > 0) {
+          const ch = content[fnEnd];
+          if (escaped) {
+            escaped = false;
+            fnEnd++;
+            continue;
+          }
+          if (ch === '\\') {
+            escaped = true;
+            fnEnd++;
+            continue;
+          }
+          if (!inString && ch === 'r') {
+            const remaining = content.slice(fnEnd);
+            const rawMatch = remaining.match(/^r(#*)"/);
+            if (rawMatch) {
+              const hashes = rawMatch[1];
+              const closing = `"${hashes}`;
+              fnEnd += rawMatch[0].length;
+              while (fnEnd < content.length && !content.slice(fnEnd).startsWith(closing)) {
+                fnEnd++;
+              }
+              if (fnEnd < content.length) {
+                fnEnd += closing.length;
+              }
+              continue;
+            }
+          }
+          if (!inString && (ch === '"' || ch === '\'')) {
+            inString = true;
+            stringChar = ch;
+          } else if (inString && ch === stringChar) {
+            inString = false;
+          } else if (!inString) {
+            if (ch === '{') braceDepth++;
+            else if (ch === '}') braceDepth--;
+          }
+          fnEnd++;
+        }
+        i = fnEnd;
+        continue;
+      }
+    }
+
+    result.push(content[i]);
+    i++;
+  }
+
+  let stripped = result.join('');
+
+  // Clean up extra blank lines (more than 2 consecutive)
+  stripped = stripped.replace(/\n{3,}/g, '\n\n');
+
+  // Trim trailing whitespace
+  stripped = stripped.trimEnd();
+
+  return stripped;
+}
+
+export async function copyExamples() {
+  try {
+    console.log('Creating examples directory...');
+    await ensureDir(targetDir);
+
+    console.log('Copying example files...');
+    const examples: Array<{ name: string; content: string }> = [];
+
+    for (const file of filesToCopy) {
+      console.log(`Copying ${file}...`);
+      await copy(path.join(sourceDir, file), path.join(targetDir, file));
+
+      // Read content for static import generation
+      const content = await readFile(`${sourceDir}${file}`, 'utf-8');
+      const strippedContent = stripTests(content);
+      examples.push({ name: file, content: strippedContent });
+    }
+
+    // Generate static examples file for build-time import
+    const examplesModule = `// Auto-generated by copy-examples.ts - DO NOT EDIT
+import type { ExampleFile } from './useExamples';
+
+export const examplesData: ExampleFile[] = [
+${examples.map(ex => `  {
+    name: '${ex.name}',
+    path: '${ex.name}',
+    language: 'rust',
+    content: \`${ex.content.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$/g, '\\$')}\`
+  }`).join(',\n')}
+];
+`;
+
+    await writeFile(path.join(__dirname, '../src/composables/examplesData.ts'), examplesModule);
+    console.log('Generated src/composables/examplesData.ts');
+
+    console.log('All examples copied successfully!');
+  } catch (error) {
+    console.error('Failed to copy examples:', error);
+    throw error;
+  }
+}
+
+copyExamples().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
