@@ -15,6 +15,18 @@ const filesToCopy = [
   'ipv6.rs'
 ];
 
+function skipRawString(content: string, index: number): number {
+  const rawMatch = content.slice(index).match(/^r(#*)"/);
+  if (!rawMatch) return index;
+
+  const closing = `"${rawMatch[1]}`;
+  let nextIndex = index + rawMatch[0].length;
+  while (nextIndex < content.length && !content.slice(nextIndex).startsWith(closing)) {
+    nextIndex++;
+  }
+  return nextIndex < content.length ? nextIndex + closing.length : nextIndex;
+}
+
 function stripTests(content: string): string {
   const result: string[] = [];
   let i = 0;
@@ -44,18 +56,9 @@ function stripTests(content: string): string {
           continue;
         }
         if (!inString && ch === 'r') {
-          const remaining = content.slice(i);
-          const rawMatch = remaining.match(/^r(#*)"/);
-          if (rawMatch) {
-            const hashes = rawMatch[1];
-            const closing = `"${hashes}`;
-            i += rawMatch[0].length;
-            while (i < content.length && !content.slice(i).startsWith(closing)) {
-              i++;
-            }
-            if (i < content.length) {
-              i += closing.length;
-            }
+          const nextIndex = skipRawString(content, i);
+          if (nextIndex !== i) {
+            i = nextIndex;
             continue;
           }
         }
@@ -75,7 +78,6 @@ function stripTests(content: string): string {
 
     const testFnMatch = remaining.match(/^#\[test\]\s*\n?\s*(?:#\[.*?\]\s*\n?\s*)*fn\s+\w+/);
     if (testFnMatch) {
-      const fnStart = i;
       let fnEnd = i + testFnMatch[0].length;
 
       while (fnEnd < content.length && content[fnEnd] !== '{') fnEnd++;
@@ -99,18 +101,9 @@ function stripTests(content: string): string {
             continue;
           }
           if (!inString && ch === 'r') {
-            const remaining = content.slice(fnEnd);
-            const rawMatch = remaining.match(/^r(#*)"/);
-            if (rawMatch) {
-              const hashes = rawMatch[1];
-              const closing = `"${hashes}`;
-              fnEnd += rawMatch[0].length;
-              while (fnEnd < content.length && !content.slice(fnEnd).startsWith(closing)) {
-                fnEnd++;
-              }
-              if (fnEnd < content.length) {
-                fnEnd += closing.length;
-              }
+            const nextIndex = skipRawString(content, fnEnd);
+            if (nextIndex !== fnEnd) {
+              fnEnd = nextIndex;
               continue;
             }
           }
@@ -158,7 +151,7 @@ export async function copyExamples() {
       await copy(path.join(sourceDir, file), path.join(targetDir, file));
 
       // Read content for static import generation
-      const content = await readFile(`${sourceDir}${file}`, 'utf-8');
+      const content = await readFile(path.join(sourceDir, file), 'utf-8');
       const strippedContent = stripTests(content);
       examples.push({ name: file, content: strippedContent });
     }
