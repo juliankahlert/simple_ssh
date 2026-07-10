@@ -22,7 +22,7 @@ try {
 
 const indexVars = new Map();
 const files = readdirSync(srcPath, { recursive: true });
-const varUsageRegex = /var\(--([\w-]+)\)/g;
+const varUsageRegex = /var\(--([\w-]+)(?:,\s*[^)]+)?\)/g;
 let match;
 
 const scssFiles = files.filter(file => file.endsWith('.scss'));
