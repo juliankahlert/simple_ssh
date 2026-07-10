@@ -1,13 +1,13 @@
 <script setup lang="ts">
-import { ref, onUnmounted } from 'vue';
+import { ref } from 'vue';
+import { useClipboard } from '../composables/useClipboard';
 import GithubIcon from './icons/GithubIcon.vue';
 import CopyIcon from './icons/CopyIcon.vue';
 import DocsIcon from './icons/DocsIcon.vue';
 import CratesIcon from './icons/CratesIcon.vue';
 
 const activeTab = ref<'lib' | 'cli'>('lib');
-const copied = ref(false);
-let copyTimeout: ReturnType<typeof setTimeout> | null = null;
+const { copied, copy } = useClipboard(2000);
 
 const snippets = {
   lib: 'cargo add simple_ssh',
@@ -15,27 +15,8 @@ const snippets = {
 };
 
 async function copySnippet() {
-  try {
-    await navigator.clipboard.writeText(snippets[activeTab.value]);
-    copied.value = true;
-    if (copyTimeout) {
-      clearTimeout(copyTimeout);
-    }
-    copyTimeout = setTimeout(() => {
-      copied.value = false;
-      copyTimeout = null;
-    }, 2000);
-  } catch (err: unknown) {
-    console.error('Failed to copy:', err);
-  }
+  await copy(snippets[activeTab.value]);
 }
-
-onUnmounted(() => {
-  if (copyTimeout) {
-    clearTimeout(copyTimeout);
-    copyTimeout = null;
-  }
-});
 </script>
 
 <template>
