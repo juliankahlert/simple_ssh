@@ -72,7 +72,7 @@ export function tokenizeRust(line: string): Token[] {
         const hashCount = rawMatch[1]?.length ?? 0;
         let strEnd = rawMatch[0].length;
         while (strEnd < remaining.length) {
-          if (remaining.charAt(strEnd) === '"' && remaining.slice(strEnd, strEnd + hashCount + 1).match(new RegExp('^"' + '#'.repeat(hashCount)))) {
+          if (remaining.charAt(strEnd) === '"' && remaining.slice(strEnd, strEnd + hashCount + 1) === '"' + '#'.repeat(hashCount)) {
             strEnd += hashCount + 1;
             break;
           }
