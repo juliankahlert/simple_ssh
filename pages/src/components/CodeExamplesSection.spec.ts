@@ -30,12 +30,20 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  global.IntersectionObserver = originalIntersectionObserver ?? global.IntersectionObserver;
-  Object.defineProperty(navigator, 'clipboard', {
-    value: originalClipboard,
-    writable: true,
-    configurable: true
-  });
+  if (originalIntersectionObserver !== undefined) {
+    global.IntersectionObserver = originalIntersectionObserver;
+  } else {
+    delete (global as Record<string, unknown>).IntersectionObserver;
+  }
+  if (originalClipboard !== undefined) {
+    Object.defineProperty(navigator, 'clipboard', {
+      value: originalClipboard,
+      writable: true,
+      configurable: true
+    });
+  } else {
+    delete (navigator as Record<string, unknown>).clipboard;
+  }
   vi.restoreAllMocks();
 })
 
