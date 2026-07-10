@@ -1,0 +1,79 @@
+$bg-primary: #0c1016;
+$bg-secondary: #141820;
+$bg-tertiary: #1d2229;
+$bg-elevated: #252b33;
+$bg-code: #10141a;
+
+$text-primary: #c5c9ce;
+$text-secondary: #8a9199;
+$text-tertiary: #5a6269;
+$text-muted: #3a4249;
+
+$accent: #5a8a9a;
+$accent-bright: #8aaaba;
+$accent-dim: #4a6a7a;
+$accent-glow: rgba(90, 138, 154, 0.15);
+$accent-warm: #c89a6a;
+
+$success: #6a8a6a;
+$warning: #9a8a6a;
+$error: #8a5a5a;
+
+$border-subtle: #1a2026;
+$border-light: #252b32;
+$border-medium: #353b42;
+
+$font-display: 'Space Grotesk', sans-serif;
+$font-mono: 'JetBrains Mono', monospace;
+
+$space-xs: 0.25rem;
+$space-sm: 0.5rem;
+$space-md: 1rem;
+$space-lg: 1.5rem;
+$space-xl: 3rem;
+$space-2xl: 6rem;
+
+$ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+$ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+$ease-dramatic: cubic-bezier(0.87, 0, 0.13, 1);
+
+:root {
+  --bg-primary: #{$bg-primary};
+  --bg-secondary: #{$bg-secondary};
+  --bg-tertiary: #{$bg-tertiary};
+  --bg-elevated: #{$bg-elevated};
+  --bg-code: #{$bg-code};
+
+  --text-primary: #{$text-primary};
+  --text-secondary: #{$text-secondary};
+  --text-tertiary: #{$text-tertiary};
+  --text-muted: #{$text-muted};
+
+  --accent: #{$accent};
+  --accent-bright: #{$accent-bright};
+  --accent-dim: #{$accent-dim};
+  --accent-glow: #{$accent-glow};
+  --accent-warm: #{$accent-warm};
+
+  --success: #{$success};
+  --warning: #{$warning};
+  --error: #{$error};
+
+  --border-subtle: #{$border-subtle};
+  --border-light: #{$border-light};
+  --border-medium: #{$border-medium};
+
+  --font-display: #{$font-display};
+  --font-mono: #{$font-mono};
+
+  --space-xs: #{$space-xs};
+  --space-sm: #{$space-sm};
+  --space-md: #{$space-md};
+  --space-lg: #{$space-lg};
+  --space-xl: #{$space-xl};
+  --space-2xl: #{$space-2xl};
+
+  --ease-out: #{$ease-out};
+  --ease-spring: #{$ease-spring};
+  --ease-dramatic: #{$ease-dramatic};
+}

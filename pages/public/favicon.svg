@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1a1f2e"/>
+      <stop offset="100%" stop-color="#0c1016"/>
+    </linearGradient>
+    <linearGradient id="accentGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#e85d04"/>
+      <stop offset="100%" stop-color="#d45d00"/>
+    </linearGradient>
+  </defs>
+  
+  <!-- Base shape: Rounded square with clipped corner for terminal feel -->
+  <rect x="2" y="4" width="28" height="24" rx="4" ry="4" fill="url(#bgGrad)"/>
+  
+  <!-- Terminal prompt bracket ">" - stylized -->
+  <path d="M8 12 L13 16 L8 20" fill="none" stroke="url(#accentGrad)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+  
+  <!-- Underscore cursor with subtle pulse -->
+  <line x1="15" y1="20" x2="22" y2="20" stroke="#c5c9ce" stroke-width="2.5" stroke-linecap="round" opacity="0.9"/>
+  
+  <!-- Decorative connection nodes - representing secure connection -->
+  <circle cx="24" cy="10" r="2" fill="#0c1016" stroke="#e85d04" stroke-width="1.5"/>
+  <circle cx="28" cy="14" r="1.5" fill="#0c1016" stroke="#e85d04" stroke-width="1"/>
+  
+  <!-- Connection line from terminal to node -->
+  <line x1="22" y1="16" x2="24" y2="10" stroke="#e85d04" stroke-width="1" opacity="0.6"/>
+  <line x1="24" y1="10" x2="28" y2="14" stroke="#e85d04" stroke-width="1" opacity="0.4"/>
+  
+  <!-- Subtle top bar reflection -->
+  <path d="M4 6 Q16 5 28 6" fill="none" stroke="#ffffff" stroke-width="0.5" opacity="0.1"/>
+</svg>
