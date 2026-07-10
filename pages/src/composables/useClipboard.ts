@@ -1,6 +1,6 @@
 import { ref, type Ref } from 'vue';
 
-export function useClipboard() {
+export function useClipboard(timeout = 1500) {
   const copied: Ref<boolean> = ref(false);
   let resetTimeout: ReturnType<typeof setTimeout> | null = null;
 
@@ -14,7 +14,7 @@ export function useClipboard() {
       resetTimeout = setTimeout(() => {
         copied.value = false;
         resetTimeout = null;
-      }, 1500);
+      }, timeout);
     } catch (error: unknown) {
       console.error(error);
     }
