@@ -430,6 +430,8 @@ function getLineDelay(index: number): string {
 .syn-type { color: #5a8a9a; }
 .syn-func { color: #9a9a7a; }
 .syn-string { color: #9a8a6a; }
+.syn-raw-string { color: #9a8a6a; }
+.syn-char { color: #9a8a6a; }
 .syn-comment { color: #5a7a5a; }
 .syn-macro { color: #5a8a9a; }
 .syn-punct { color: #9a9a9a; }
